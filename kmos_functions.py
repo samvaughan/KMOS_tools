@@ -149,7 +149,10 @@ def SAM_create_sof(filelist, recipe_name, calibration_location=None, reduced_dar
 
     assert recipe_name in ['kmos_dark', 'kmos_flat', 'kmos_wave_cal', 'kmos_illumination', 'kmos_std_star', 'kmos_sci_red', 'kmos_combine'], 'Recipe name not understood!'
     # Add Calibrations
-    if recipe_name == 'kmos_flat' :
+    if recipe_name == 'kmos_dark':
+        #Don't need to add anything here
+        pass
+    elif recipe_name == 'kmos_flat' :
         if reduced_dark_folder is None:
             fname='{}/BADPIXEL_DARK.fits'.format(calibration_location)
             check_file_exists(fname)
@@ -203,7 +206,7 @@ def SAM_create_sof(filelist, recipe_name, calibration_location=None, reduced_dar
 
     elif recipe_name == 'kmos_sci_red':
         #Write the sof for the illumination correction. Requires XCAL, YCAL, LCAL, FLAT_EDGE and the static WAVE_BAND
-        assert telluric_directory is not None, 'Must have a telluric file location for the science reduction!'
+        #assert telluric_directory is not None, 'Must have a telluric file location for the science reduction!'
         sof.write("{}/LCAL_{}.fits        LCAL\n".format(calibration_location, band_3uc))
         sof.write("{}/ILLUM_CORR_{}.fits  ILLUM_CORR\n".format(calibration_location, band_3uc))
         sof.write("{}/MASTER_FLAT_{}.fits MASTER_FLAT\n".format(calibration_location, band_3uc))
@@ -211,7 +214,8 @@ def SAM_create_sof(filelist, recipe_name, calibration_location=None, reduced_dar
         sof.write("{}/YCAL_{}.fits        YCAL\n".format(calibration_location, band_3uc))
         sof.write("{}/kmos_wave_band.fits       WAVE_BAND\n".format(kmos_static_calib_directory))
         sof.write("{}/kmos_oh_spec_iz.fits       OH_SPEC\n".format(kmos_static_calib_directory))
-        sof.write("{}/TELLURIC_IZIZIZ.fits       TELLURIC\n".format(telluric_directory))
+        if telluric_directory:
+            sof.write("{}/TELLURIC_IZIZIZ.fits       TELLURIC\n".format(telluric_directory))
 
     elif recipe_name == 'kmos_combine':
         #We don't need any other files for kmos_combine
@@ -228,12 +232,12 @@ def SAM_create_sof(filelist, recipe_name, calibration_location=None, reduced_dar
     return sof_basename
 
 
-def reduce_darks(calibration_location, dark_files, options):
+def reduce_darks(destination_directory, dark_files, options):
     """
     Reduce a set of darks. 
     Arguments:
-        my_dir: directory the .sof file will be created in
-        dark files: A list of dark filenames
+        destination_directory: directory the .sof file will be created in and where esorex will be run
+        dark_files: List of raw dark files to reduce
         options: Command line options
     """
 
@@ -241,19 +245,18 @@ def reduce_darks(calibration_location, dark_files, options):
     # Generate exection command 
     cmds=[]   
     recipe_name='kmos_dark'
-    sof_name = SAM_create_sof(dark_files, recipe_name, calibration_location=calibration_location)
+    sof_name = SAM_create_sof(dark_files, recipe_name, location_for_sof=destination_directory)
     log_file = "esorex_"+recipe_name+".log"
     base_cmd = ['esorex', '--suppress-prefix=TRUE', '--log-file='+log_file, '--log-dir=.', recipe_name, sof_name]
-    cmds.append({'cmd': base_cmd, 'dir': my_dir})
+    cmds.append({'cmd': base_cmd, 'dir': destination_directory})
     exec_commands(cmds, options.parallel)
 
-def reduce_calibs(calibration_location, filelist,  recipe_name, options, reduced_dark_folder=None, reduced_flat_folder=None):
+def reduce_calibs(destination_directory, filelist, recipe_name, options, reduced_dark_folder=None, reduced_flat_folder=None):
     """
     Reduce a set of calibrations. 
     Arguments:
-        my_dir: directory the .sof file will be created in
-        selected_sets: A list of lists. Each list contains a set of calibrations to reduce
-        calib_descritpion: The type of calibration to reduce. Must be one of .
+        destination_directory: directory the .sof file will be created in
+        filelist: List of raw files to reduce
         recipe name: The name of the esorex recipe to call. 
         options: Command line options
         reduced_dark_folder. Default is None. If we've already reduced darks, which folder are they in?
@@ -262,12 +265,15 @@ def reduce_calibs(calibration_location, filelist,  recipe_name, options, reduced
 
     # Generate exection command
     cmds=[]
-    sof_name = SAM_create_sof(filelist, recipe_name, calibration_location=calibration_location, reduced_dark_folder=reduced_dark_folder, reduced_flat_folder=reduced_flat_folder)
+    sof_name = SAM_create_sof(filelist, recipe_name, calibration_location=destination_directory, reduced_dark_folder=reduced_dark_folder, reduced_flat_folder=reduced_flat_folder, location_for_sof=destination_directory)
     
 
     log_file = "esorex_"+recipe_name+".log"
-    base_cmd = ['esorex', '--suppress-prefix=TRUE', '--log-file='+log_file, '--log-dir=.', recipe_name, sof_name]
-    cmds.append({'cmd': base_cmd, 'dir': my_dir})
+    if recipe_name=='kmos_illumination':
+        base_cmd = ['esorex', '--suppress-prefix=TRUE', '--log-file='+log_file, '--log-dir=.', recipe_name, '--pix_scale=0.2', sof_name]
+    else:
+        base_cmd = ['esorex', '--suppress-prefix=TRUE', '--log-file='+log_file, '--log-dir=.', recipe_name, sof_name]
+    cmds.append({'cmd': base_cmd, 'dir': destination_directory})
     
     exec_commands(cmds, options.parallel)
 
@@ -276,13 +282,14 @@ def reduce_std_star(destination_directory, calibration_directory, filelist,  rec
     """
     Reduce a standard star observation. 
     Arguments:
-        my_dir: directory the .sof file will be created in
-        selected_sets: A list of lists. Each list contains a set of calibrations to reduce
-        calib_descritpion: The type of calibration to reduce. Must be one of .
+        destination_directory: directory the .sof file will be created in
+        calibration_directory: Locatin of the calibration files
+        filelist: List of raw files to reduce
         recipe name: The name of the esorex recipe to call. 
         options: Command line options
         reduced_dark_folder. Default is None. If we've already reduced darks, which folder are they in?
         reduced_flat_folder. Default is None. If we've already reduced the flats, which folder are they in?
+        kmos_static_calib_directory: Location of *static* calibration files (e.g arc lines, atmospheric models, etc)
     """
 
     #Check the destination directory exists, and make it if not
@@ -291,7 +298,7 @@ def reduce_std_star(destination_directory, calibration_directory, filelist,  rec
 
     # Generate exection command
     cmds=[]
-    sof_name = SAM_create_sof(filelist, recipe_name, calibration_directory=calibration_directory,  location_for_sof=destination_directory)
+    sof_name = SAM_create_sof(filelist, recipe_name, calibration_location=calibration_directory,  location_for_sof=destination_directory)
     
     log_file = "esorex_"+recipe_name+".log"
     base_cmd = ['esorex', '--suppress-prefix=TRUE', '--log-file='+log_file, '--log-dir=.', recipe_name, sof_name]
