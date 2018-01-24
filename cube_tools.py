@@ -10,7 +10,13 @@ import astropy.stats as S
 
 from ppxf.cap_mpfit import mpfit
 
-def twoD_Gaussian((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
+import lmfit as LM   
+import scipy.constants as const
+from stellarpops.tools import fspTools as FT
+
+import plotting as P
+
+def twoD_Gaussian_list((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
     xo = float(xo)
     yo = float(yo)    
     a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
@@ -20,27 +26,75 @@ def twoD_Gaussian((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
                             + c*((y-yo)**2)))
     return g.ravel()
 
+def twoD_Gaussian_with_slope(params, X, Y):
+
+    xo = params['X']
+    yo = params['Y']
+    theta = params['ROTATION']
+    sigma_x = params['XWIDTH']
+    sigma_y = params['YWIDTH']
+    offset = params['OFFSET']
+    amplitude = params['Amp']
+    slope_X = params['X_GRAD']
+    slope_Y = params['Y_GRAD']
+
+    a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
+    b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
+    c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+
+
+    g = offset + slope_X*X +slope_Y*Y + amplitude*np.exp( - (a*((X-xo)**2) + 2*b*(X-xo)*(Y-yo) 
+                            + c*((Y-yo)**2)))
+
+    return g
+
+
+
+def twoD_Gaussian(params, X, Y):
+
+    xo = params['X']
+    yo = params['Y']
+    theta = params['ROTATION']
+    sigma_x = params['XWIDTH']
+    sigma_y = params['YWIDTH']
+    offset = params['OFFSET']
+    amplitude = params['Amp']
+
+    a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
+    b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
+    c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+    g = offset + amplitude*np.exp( - (a*((X-xo)**2) + 2*b*(X-xo)*(Y-yo) 
+                            + c*((Y-yo)**2)))
+
+    return g
+
+
+
 def moments(data):
     """Returns (height, x, y, width_x, width_y)
     the gaussian parameters of a 2D distribution by calculating its
     moments """
-    total = np.nansum(data)
-    X, Y = np.indices(data.shape)
-    x = np.nansum((X*data))/total
-    y = np.nansum((Y*data))/total
+    total = np.nansum(np.abs(data))
+    Y, X = np.indices(data.shape)
+    x = np.nansum((X*np.abs(data)))/total
+    y = np.nansum((Y*np.abs(data)))/total
     # col = data[:, int(y)]
     # width_x = np.sqrt(np.nansum(np.abs((np.arange(col.size)-y)**2*col))/np.nansum(col))
     # row = data[int(x), :]
     # width_y = np.sqrt(np.nansum(np.abs((np.arange(row.size)-x)**2*row))/np.nansum(row))
     height = np.nanmax(data)
 
-
-
-    theta=0.0
+    theta=np.pi/2.0
     offset=np.nanmedian(data)
     width_x=2.0
     width_y=2.0
+
+    slope_X=0.0
+    slope_Y=0.0
+
     return height, x, y, width_x, width_y, theta, offset
+
+
 
 def get_av_seeing(opt, pixel_scale=0.2):
     """
@@ -50,62 +104,13 @@ def get_av_seeing(opt, pixel_scale=0.2):
 
     return pixel_scale*np.sqrt(opt[3]**2+opt[4]**2)
 
-def get_KMOS_csv_data(object_name):
-
-    data=np.genfromtxt('/Data/KCLASH/KCLASH_cube_data.csv', delimiter=',', dtype=str, skip_header=1, autostrip=True)
-    
-    galaxies=list(data[:, 0])
 
 
-    try:
-        obj_index=galaxies.index(object_name)
-        return data[obj_index, :]
-    except ValueError:
-        warnings.warn('No Entry found for {}'.format(object_name))
-        return None
-        
-
-
-    
-
-
-
-
-
-def get_KMOS_arm_number(object_name):
-
-    arm_dict={
-                'MACS1931_bluefield_50044' : 1 ,
-                'MACS1931_bluefield_41168' : 10,
-                'MACS1931_blueclust_42661' : 11,
-                'MACS1931_blueclust_36441' : 12,
-                'ARMSTAR401' : 13,
-                'MACS1931_redclust_43187' : 14,
-                'MACS1931_bluefield_44837' : 15,
-                'MACS1931_bluefield_45168' : 16,
-                'MACS1931_redclust_40753' : 17,
-                'ARMSTAR423' : 18,
-                'MACS1931_blueclust_40782' : 19,
-                'MACS1931_redclust_58042' : 2 ,
-                'MACS1931_bluefield_43122' : 20,
-                'MACS1931_blueclust_46452' : 21,
-                'MACS_1931_ARM22_SCI'  : 22,
-                'MACS_1931_ARM23_SCI' : 23,
-                'MACS1931_redclust_55075' : 24,
-                'MACS1931_bluefield_53332' : 3 ,
-                'MACS1931_blueclust_52577' : 4 ,
-                'MACS1931_BCG_59407' : 5 ,
-                'MACS1931_blueclust_48927' : 6 ,
-                'MACS1931_bluefield_51071' : 7 ,
-                'ARMSTAR382' : 8 ,
-                'MACS1931_bluefield_46041' : 9
-
-                }
-
-    return arm_dict[object_name]
 
 
 class Cube(object):
+
+
     def __init__(self, cube_filename, extension=1, object_name=None, noise_cube=None):
 
         """
@@ -151,16 +156,18 @@ class Cube(object):
 
 
            
-        data=get_KMOS_csv_data(self.object_name)
+        data=self.get_KMOS_fits_data(self.object_name)
         if data is not None:
-            self.Ha_flag=bool(float(data[1]))
-            self.continuum_flag=bool(float(data[2]))
-            self.Ha_lam=float(data[3])
-            self.other_lines_flag=bool(data[4])
-            self.cluster=data[5]
-            self.quadrant=data[6]
-            self.skysub_method=data[7]
-            self.cubecomments=data[8]
+            self.Ha_flag=bool(data['Detected Emission?'])
+            self.continuum_flag=bool(data['Detected Continuum?'])
+            self.Ha_lam=float(data['Lamda_Ha'])
+            self.other_lines_flag=bool(data['Other lines?'])
+            self.cluster=data['Cluster_2']
+            self.quadrant=data['Quadrant']
+            self.skysub_method=data['SkySub']
+            self.cubecomments=data['Comment']
+
+            self.table=data
             if self.Ha_flag:
                 self.z=(self.Ha_lam/0.65628)-1.0
             else:
@@ -169,11 +176,12 @@ class Cube(object):
         else:
             warnings.warn("No data found for {}".format(self.object_name))
 
-        #Get the IFU arm, if we have it:
-        try:
-            self.arm=get_KMOS_arm_number(self.object_name)
-        except KeyError:
-            warnings.warn("No Arm data found for {}".format(self.object_name))
+
+        # #Get the IFU arm, if we have it:
+        # try:
+        #     self.arm=get_KMOS_arm_number(self.object_name)
+        # except KeyError:
+        #     warnings.warn("No Arm data found for {}".format(self.object_name))
 
 
         #Get the number of dimensions. Should be 3
@@ -230,10 +238,81 @@ class Cube(object):
         #Set the pixel scale
         self.pix_scale=self.pri_header['HIERARCH ESO PRO REC1 PARAM8 VALUE']
 
+        #The cube hasn't been collapsed yet
+        self.collapsed=None
+
+        self.has_been_collapsed=False
 
 
 
 
+    @staticmethod
+    def get_KMOS_csv_data(object_name):
+
+        data=np.genfromtxt('/Data/KCLASH/KCLASH_cube_data.csv', delimiter=',', dtype=str, skip_header=1, autostrip=True)
+        
+        
+        galaxies=list(data[:, 0])
+
+
+        
+        obj_index=galaxies.index(object_name)
+        return data[obj_index, :]
+
+
+
+    @staticmethod 
+    def get_KMOS_fits_data(object_name):
+
+        hdu=fits.open('/Data/KCLASH/KCLASH_all_parameters.fits')
+        data=hdu[1].data
+        
+        
+        mask=data['Galaxy Name']==object_name
+        n_results=len(np.where(mask==True)[0])
+        if n_results==1:
+            return data[mask]
+        else:
+            warnings.warn('Found {} entries for {}'.format(n_results, object_name))
+            return None
+
+        
+
+
+
+
+    @staticmethod
+    def get_KMOS_arm_number(object_name):
+
+        arm_dict={
+                    'MACS1931_bluefield_50044' : 1 ,
+                    'MACS1931_bluefield_41168' : 10,
+                    'MACS1931_blueclust_42661' : 11,
+                    'MACS1931_blueclust_36441' : 12,
+                    'ARMSTAR401' : 13,
+                    'MACS1931_redclust_43187' : 14,
+                    'MACS1931_bluefield_44837' : 15,
+                    'MACS1931_bluefield_45168' : 16,
+                    'MACS1931_redclust_40753' : 17,
+                    'ARMSTAR423' : 18,
+                    'MACS1931_blueclust_40782' : 19,
+                    'MACS1931_redclust_58042' : 2 ,
+                    'MACS1931_bluefield_43122' : 20,
+                    'MACS1931_blueclust_46452' : 21,
+                    'MACS_1931_ARM22_SCI'  : 22,
+                    'MACS_1931_ARM23_SCI' : 23,
+                    'MACS1931_redclust_55075' : 24,
+                    'MACS1931_bluefield_53332' : 3 ,
+                    'MACS1931_blueclust_52577' : 4 ,
+                    'MACS1931_BCG_59407' : 5 ,
+                    'MACS1931_blueclust_48927' : 6 ,
+                    'MACS1931_bluefield_51071' : 7 ,
+                    'ARMSTAR382' : 8 ,
+                    'MACS1931_bluefield_46041' : 9
+
+                    }
+
+        return arm_dict[object_name]
 
     def collapse(self, wavelength_mask=None, collapse_func=np.nansum, plot=False,  plot_args={}, savename=None, save_args={}):
         """
@@ -258,14 +337,16 @@ class Cube(object):
         if savename is not None:
             raise ValueError('Code not yet written!!')
 
+        self.has_been_collapsed=True
 
     def plot_collaped_cube(self, fig=None, ax=None, savename=None, **kwargs):
 
         if ax is None or ax is None:
             fig, ax=plt.subplots(figsize=(10, 10))
 
-        
-        im=ax.imshow(self.collapsed, aspect='auto', origin='lower', **kwargs)
+        #vmin = kwargs.pop('vmin', 0.0)
+        vmax = kwargs.pop('vmax', 0.98*np.nanmax(self.collapsed))
+        im=ax.imshow(self.collapsed, aspect='auto', origin='lower',vmax=vmax, **kwargs)
         fig.colorbar(im, ax=ax, label='{}'.format(self.flux_unit))
         ax.set_xlabel('x')
         ax.set_ylabel('y')
@@ -420,7 +501,7 @@ class Cube(object):
 
         mask=np.zeros_like(self.lamdas, dtype=bool)
         for line in wavelengths:
-            m=self.get_spec_mask_around_wave(self, line, line_width)
+            m=self.get_spec_mask_around_wave(line, line_width)
             mask=mask | m
         
         #Plot the quick spectrum, showing the lines we're mapping
@@ -585,10 +666,10 @@ class Cube(object):
 
 
 
-    def fit_gaussian(self, fit_funct=twoD_Gaussian, clip=True, noise=True):
+    def fit_gaussian(self, fit_funct=twoD_Gaussian, method='leastsq', clip=False):
 
         """
-        Fit a Gaussian to a 2D collapsed cube
+        Fit a Gaussian to a 2D collapsed cube using lmfit
         """
 
         
@@ -602,18 +683,19 @@ class Cube(object):
             collapsed_cube=self.collapsed
 
 
-        image=collapsed_cube
-        if noise:
-            errors=np.sqrt(np.nansum(self.noise**2, axis=0))
-            errors[errors<=0.0]=100 
+        xmin=2
+        xmax=-2
+        ymin=2
+        ymax=-2
+
+        image=collapsed_cube.copy()[xmin:xmax, ymin:ymax]
+        errors=np.sqrt(np.nansum(self.noise[:, xmin:xmax, ymin:ymax]**2, axis=0))
+        errors[errors<=0.0]=100 
 
         Y, X = np.indices(image.shape)
 
         #Tidy up the image so we have no infs or nans
         image[~np.isfinite(image)]=0.0
-        #im_median=np.nanmedian(image)
-
-        #image[image<0.0]=0.0
 
         if clip:
             clipped_img=S.sigma_clip(image, sigma_lower=2.0, sigma_upper=3.0, iters=3)
@@ -623,112 +705,100 @@ class Cube(object):
         #Initial Guess. Use the maxval of the image for the Gaussian height. Maybe use mean instead?
         #Best guess is centre, with sigma of 2 in each direction. Theta is 0.0 and so is the overall y offset
         max_val=np.nanmax(self.collapsed)
+
+        #Normalise things to avoid having some parameters at 1e-20 and others at 1
+        median=np.abs(np.median(image))
+        image/=median
+        errors/=median
+
+
         initial_guess=moments(image)
 
+        params=LM.Parameters()
+        params.add('Amp', value=initial_guess[0], min=1e-3)
+        params.add('X', value=initial_guess[1], min=0.5, max=image.shape[1]-0.5)
+        params.add('Y', value=initial_guess[2], min=0.5, max=image.shape[0]-0.5)
+        params.add('XWIDTH', value=initial_guess[3], min=0.1, max=6.0)
+        params.add('YWIDTH', value=initial_guess[4], min=0.1, max=6.0)
+        params.add('ROTATION', value=initial_guess[5], min=0.0, max=2*np.pi)
+        params.add('OFFSET', value=initial_guess[6])
+        params.add('X_GRAD', value=0.0) 
+        params.add('Y_GRAD', value=0.0) 
 
-        parinfo = [ 
-            {'n':1,'value':initial_guess[0],'step':1e-20, 'limits':[0.0,1e-15],'limited':[True, False],'fixed':False,'parname':"AMPLITUDE",'error':0},
-            {'n':2,'value':initial_guess[1],'step':0.01, 'limits':[0.0,self.nx],'limited':[True,True],'fixed':False,'parname':"XSHIFT",'error':0},
-            {'n':3,'value':initial_guess[2],'step':0.01, 'limits':[0.0,self.ny],'limited':[True,True],'fixed':False,'parname':"YSHIFT",'error':0},
-            {'n':4,'value':initial_guess[3],'step':0.01, 'limits':[0.0,20.0],'limited':[True,False],'fixed':False,'parname':"XWIDTH",'error':0}, 
-            {'n':5,'value':initial_guess[4],'step':0.01, 'limits':[0.0,20.0],'limited':[True,False],'fixed':False,'parname':"YWIDTH",'error':0},
-            {'n':6,'value':initial_guess[5],'step':0.01, 'limits':[0.0,360.0],'limited':[False,False],'fixed':False,'parname':"ROTATION",'error':0},
-            {'n':7,'value':0.0, 'step':1e-20, 'limits':[-1e-15,1e-15],'limited':[False,False],'fixed':False,'parname':"OFFSET",'error':0}
-            ]
-
-        def mpfitfun(data,err):
-            if err is None:
-                def f(p,fjac=None): return [0, data.ravel()-twoD_Gaussian((X, Y), *p)]
-            else:
-                def f(p,fjac=None): return [0, (data.ravel()-twoD_Gaussian((X, Y), *p))/err.ravel()]
-            return f
-
-        if noise is True:
-            errors[errors<=0.0]=100            
-            mp = mpfit(mpfitfun(image,errors),parinfo=parinfo,quiet=False)
-
-            try:
-                popt, pcov = opt.curve_fit(fit_funct, (X, Y), image, sigma=errors.ravel(), p0=initial_guess)
-            except:
-                popt=None
+        def lmfitfun(p, data, err, X, Y):
+            return (data.ravel()-twoD_Gaussian_with_slope(p, X, Y).ravel())/err.ravel()
 
 
-        else:
-            mp = mpfit(mpfitfun(image,None),parinfo=parinfo,quiet=False)
 
-            try:
-                popt, pcov = opt.curve_fit(fit_funct, (X, Y), image.ravel(), p0=initial_guess)
-            except:
-                popt=None
 
-        return image, mp, popt, initial_guess
+        minimiser = LM.Minimizer(lmfitfun, params, fcn_args=(image, errors, X, Y))
+        result = minimiser.minimize(method=method)   
 
-    def get_continuum_centre(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=True, fig=None, ax=None, clip=False, plot_collaped_cube_args={}, contour_args={}):
+
+        
+
+        # try:
+        #     popt, pcov = opt.curve_fit(fit_funct, (X, Y), image.ravel(), sigma=errors.ravel(), p0=initial_guess)
+        # except:
+        #     popt=None
+
+
+        #Deal with the amount of the cube we clipped off:
+        result.params['X'].set(value=result.params['X']+xmin, min=0.0, max=image.shape[1])
+        result.params['Y'].set(value=result.params['Y']+ymin, min=0.0, max=image.shape[0])
+
+        #import pdb; pdb.set_trace()
+
+        return image, errors, minimiser, result
+
+    def get_continuum_centre(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=False, fig=None, ax=None, clip=False, return_full=False, fit_args={}, plot_collaped_cube_args={}, contour_args={}):
 
         """
         Fit a guassian to a collapsed cube and get the x, y coordinates of the centre. 
         """
-        found_gaussian=True
-        image, mp, popt, initial_guess=self.fit_gaussian(fit_funct, clip=clip)
         
-        ###FIXME
 
-        if found_gaussian:
-            Y, X = np.indices(image.shape)
-            dx=image.shape[0]
-            dy=image.shape[1]
-            try:
-                best_gaussian_scipy=twoD_Gaussian((X, Y), *popt)
-            except:
-                pass
-            try:
-                best_gaussian_mpfit=twoD_Gaussian((X, Y), *mp.params)
-            except:
-                pass
 
-            ret=[mp, popt]
+        image, errors, minimiser, result=self.fit_gaussian(fit_funct, clip=clip)
+        
+      
+        ret=[result]
+        
 
-            if plot:
-                if fig is None or ax is None:
-                    fig, ax=plt.subplots(figsize=(10, 10))
-                fig, ax=self.plot_collaped_cube(fig=fig, ax=ax, **plot_collaped_cube_args)
+        if plot:
+            if fig is None or ax is None:
+                fig, ax=plt.subplots(figsize=(10, 10))
+            fig, ax=self.plot_collaped_cube(fig=fig, ax=ax, **plot_collaped_cube_args)
 
-                # #import pdb; pdb.set_trace()
-                # levels=np.array([0.2, 0.4, 0.6, 0.8, 0.95])*np.max(np.abs(best_gaussian))
-                # if np.max(best_gaussian)<0.0:
-                #     levels=-1.0*levels
-                # ax.contour(X, Y, best_gaussian.reshape(self.ny, self.nx), levels=levels, linewidth=2.0, colors='w', **contour_args)
-                try:
-                    ax.contour(X, Y, best_gaussian_scipy.reshape(dy, dx), linewidth=2.0, colors='w', **contour_args)
-                except:
-                    pass
-                try:
-                    ax.contour(X, Y, best_gaussian_mpfit.reshape(dy, dx), linewidth=2.0, colors='r', **contour_args)
-                except:
-                    pass
+            Y, X = np.indices(self.collapsed.shape)
+            best_gaussian=twoD_Gaussian(result.params, X, Y)
+            
+            ax.contour(X, Y, best_gaussian, linewidth=1.0, colors='r', **contour_args)
 
-                ax.set_title(r"{}: $\sigma_{{x}}={:.2f}$, $\sigma_{{y}}={:.2f}$".format(ax.get_title(), popt[3], popt[4]))
+            ax.set_title(r"{}: $X={:.2f}$, $Y={:.2f}$".format(ax.get_title(), result.params['X'].value, result.params['Y'].value))
 
-                if savename is not None:
-                    fig.savefig(savename)
-                ret.append((fig, ax))
+            if savename is not None:
+                fig.savefig(savename)
+            ret.append((fig, ax))
 
 
             if verbose:
                 print "\nObject: {}".format(self.object_name)
                 print "Best Fitting Gaussian:"
-                print "\t(x, y)={:.2f}, {:.2f}".format(popt[1], popt[2])
+                print "\t(x, y)={:.2f}, {:.2f}".format(result.params['X'].value, result.params['Y'].value)
+                LM.report_fit(result)
 
 
 
-            if (not 0 < popt[1] < self.ny) or (not 0 < popt[2] < self.nx):
-                warnings.warn("Gaussian is a bad fit!")
-                ret[0]=(np.nan, np.nan)
+        if return_full:
+            ret.append((image, errors, minimiser))
+
+        if len(ret)>1:
+            ret=tuple(ret)
         else:
-            ret=[(np.nan, np.nan), np.nan]
+            ret=ret[0]
 
-        return tuple(ret)
-
+        return ret
 
     def get_PSF(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=True, fig=None, ax=None, plot_collaped_cube_args={}, contour_args={}):
 
@@ -786,7 +856,9 @@ class Cube(object):
             y=np.arange(self.ny)
 
             x_new=np.arange(0, self.nx, 0.5)
-            y_new=np.arange(0, self.nx, 0.5)
+            y_new=np.arange(0, self.ny, 0.5)
+
+            
 
             interp=si.RegularGridInterpolator((self.lamdas, y, x), self.data, bounds_error=False, fill_value=np.nan)
             noise_interp=si.RegularGridInterpolator((self.lamdas, y, x), self.noise, bounds_error=False, fill_value=np.nan)
@@ -810,7 +882,9 @@ class Cube(object):
             ratio[~np.isfinite(ratio)]=1.0
             ratio[ratio<0.0]=1.0
 
-            ratio_cube=np.repeat(ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, x_new.shape[0], y_new.shape[0])
+            ratio_cube=np.repeat(ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
+
+            
 
             self.data=new_cube*ratio_cube
             self.noise=new_noise*ratio_cube
@@ -913,3 +987,397 @@ def get_1_arcsec_line(cube, cutout):
 
 
 
+
+
+
+
+
+
+# def get_gas_emission_templates(lamRange1, velscale, FWHM_gal):
+
+#     from stellarpops.tools import CD12tools as CT
+#     import glob
+#     import ppxf_util as util
+
+#     #Set up the templates to fit
+#     cvd = glob.glob('/Data/stellarpops/CvD1.2/t*.ssp')
+#     cvd.sort()
+
+#     #CvD Templates are at resolution 2000, so work out lamda/R for the middle wavelength in your array
+#     FWHM_tem = np.median(lamRange1)/2000
+
+
+
+#     #Use Simon's CvDTools function to read in the CvD models and get them into proper units
+#     cvd_data=CT.loadCD12spec(cvd[0])
+#     #They're returned in Ryan's spectrum class. spec.lam is wavelengths, spec.flam is flux in lamda units
+#     lams=cvd_data.lam
+#     pad=100
+#     lamRange2=(lamRange1[0]-pad, lamRange1[1]+pad)
+#     template_mask=np.where((lams>lamRange2[0])&(lams<lamRange2[1]))[0]
+#     cdelt=lams[10]-lams[9]
+
+
+
+
+
+#     FWHM_dif = np.sqrt((FWHM_gal**2 - FWHM_tem**2).clip(0))
+#     sigma = FWHM_dif/2.355/cdelt # Sigma difference in pixels
+#     #Log Rebin one spectrum to get the length of the templates array right
+#     ssp=cvd_data.flam[0][template_mask]
+#     #ssp = ndimage.gaussian_filter1d(ssp,sigma)
+#     sspNew, logLam2, velscale = util.log_rebin(lamRange2, ssp, velscale=velscale)
+
+#     logtemplate=sspNew.copy()
+
+
+
+#     gas_templates, line_names, line_wave = util.emission_lines(logLam2, lamRange1, FWHM_gal)
+
+#     gas_templates=np.stack((gas_templates[:, 0], gas_templates[:, -1])).T
+#     #gas_templates=gas_templates[:, 0].reshape(-1, 1)
+
+#     return gas_templates, lamRange2, logLam2
+
+
+# def get_SN(pp, loggalaxy, lognoise, baseline_noise):
+
+
+
+#     #Get the polynomial from pPXF
+#     x = np.linspace(-1, 1, len(loggalaxy))
+#     apoly = np.polynomial.legendre.legval(x, pp.polyweights)
+
+
+
+#     emission_lines=pp.bestfit-apoly
+
+#     emission_mask=emission_lines>1e-23
+
+
+
+#     SN=np.nansum(emission_lines[emission_mask])/np.sqrt(np.nansum((lognoise[emission_mask]**2)))
+#     #SN=np.sum(emission_lines[emission_mask])/(baseline_noise*len(lognoise[emission_mask]))
+
+
+
+#     if not np.isfinite(SN):
+#         SN=0.0
+
+#     return SN
+
+# def call_ppxf(parameters, quiet=True):
+#     import time
+#     from ppxf import ppxf
+
+#     gas_templates, loggalaxy, lognoise, velscale, start, logLam1, logLam2, goodPixels=parameters
+
+#     #print("Running pPXF on Cube Spectra {}".format(i))
+#     #Logarithmically rebin the galaxy and noise spectrum using the ppxf utils function
+
+#     # loggalaxy/=galmedian # Normalize spectrum to avoid numerical issues
+#     # lognoise/=galmedian
+#     # #gas_templates*=100
+ 
+#     c = 299792.458
+
+#     dv = (logLam2[0]-logLam1[0])*c # km/s
+
+#     #z = np.exp(vel/c) - 1   # Relation between velocity and redshift in pPXF
+#     #goodPixels = util.determine_goodpixels(logLam1, lamRange2, 0.0)
+
+
+#     t= time.clock()
+
+
+#     pp = ppxf.ppxf(gas_templates, loggalaxy, lognoise, velscale, start, mask=goodPixels, plot=False, moments=2, degree=1, vsyst=dv, clean=False, quiet=quiet)
+
+
+
+#     if not quiet:
+
+#         print("Formal errors:")
+#         print("     dV    dsigma   dh3      dh4")
+#         print("".join("%8.2g" % f for f in pp.error*np.sqrt(pp.chi2)))
+#         print('Elapsed time in PPXF: %.2f s' % (time.clock() - t))
+#         print(pp.sol,  pp.error*np.sqrt(pp.chi2))
+
+#     return pp
+
+
+# def fit_Halpha_emission_lines_ppxf(cube, spectrum, noise_spectrum, templates=None, clip=True, baseline_subtract=True, quiet=True):
+
+#     """
+#     templates: tuple, optional.
+#         A tuple of the emission line templates, lamRange2,  logLam2 and velscale
+#     """
+
+#     import ppxf_util as util
+#     from stellarpops.tools import CD12tools as CT
+#     import astropy.stats as S
+
+
+
+#     #Set up the various masks we apply to the spectra
+#     #Mask clips off the edges around Halpha
+#     mask=cube.get_spec_mask_around_wave(0.65628*(1+cube.z), 0.1)
+#     #fit_mask clips just around the H alpha emission line
+#     fit_mask=cube.get_spec_mask_around_wave(0.65628*(1+cube.z), 0.05)
+#     #This mask takes the main part of the spectrum but ignores the emission lines
+#     mask_for_noise_std=(mask) & (~fit_mask)
+
+
+#     #Get the wavelength range
+#     wave=cube.lamdas.copy()
+#     wave*=((10**4)/(1+cube.z))
+#     low_mask=wave[fit_mask][0]
+#     high_mask=wave[fit_mask][-1]
+
+#     lamRange1 =np.array([low_mask, high_mask])
+
+
+#     if templates is None:
+#         #Read in one galaxy spec to get the velscale:
+#         example_spec=cube.data[:, 10, 10]
+#         _, _, velscale = util.log_rebin(lamRange1, example_spec[fit_mask])
+
+#         FWHM_gal=2.0
+#         #Make the templates
+#         gas_templates, lamRange2, logLam2=get_gas_emission_templates(lamRange1, velscale, FWHM_gal)
+#     else:
+#         gas_templates, lamRange2, logLam2, velscale=templates
+
+#     #start values
+#     start=[0.0, 3*velscale]
+
+#     #Mask we can edit to remove bad pixels
+#     goodPixels=np.ones_like(spectrum, dtype=bool)
+
+#     if clip:
+#         clipped=S.sigma_clip(spectrum, sigma_upper=5.0, sigma_lower=1.0, iters=3)
+
+#         spectrum=clipped.filled(0.0)
+#         goodPixels[clipped.mask]=False
+
+
+#     if baseline_subtract:
+#         import continuum                        
+#         cont=continuum.fit_continuum(wave, spectrum, noise_spectrum, clip=[1, 10, 10], order=5) 
+#         spectrum-=cont
+            
+
+
+#     #A spectrum which is cut around the emission lines, but also has the emission lines masked out
+#     spec_for_std=spectrum[mask_for_noise_std]
+#     #RMS of this emission line free spectrum- separate noise estimate
+#     rms=np.std(spec_for_std)
+#     #Median of this spectrum
+#     baseline_noise=np.nanmedian(spec_for_std)
+
+
+
+#     loggalaxy, logLam1, velscale = util.log_rebin(lamRange1, spectrum[fit_mask])
+#     lognoise, logLam1, _=util.log_rebin(lamRange1, noise_spectrum[fit_mask])
+
+#     parameters=[gas_templates, loggalaxy, lognoise, velscale, start, logLam1, logLam2, goodPixels[fit_mask]]
+
+#     pp=call_ppxf(parameters, quiet=quiet)
+
+#     SN=get_SN(pp, loggalaxy, lognoise, baseline_noise)
+
+#     return pp, SN
+
+# def fit_Halpha_emission_lines(cube, spectrum, noise_spectrum, templates=None, clip=False, baseline_subtract=False, quiet=True, return_specs=False):
+
+#     """
+#     templates: tuple, optional.
+#         A tuple of the emission line templates, lamRange2,  logLam2 and velscale
+#     """
+
+#     import ppxf_util as util
+#     from stellarpops.tools import CD12tools as CT
+#     import astropy.stats as S
+
+
+
+#     #Set up the various masks we apply to the spectra
+#     #Mask clips off the edges around Halpha
+#     mask=cube.get_spec_mask_around_wave(0.65628*(1+cube.z), 0.1)
+#     fit_mask=cube.get_spec_mask_around_wave(0.65628*(1+cube.z), 0.05)
+#     mask_for_noise_std=(mask) & (~fit_mask)
+
+
+#     #Get the wavelength range
+#     wave=cube.lamdas.copy()
+#     wave*=((10**4)/(1+cube.z))
+#     low_mask=wave[fit_mask][0]
+#     high_mask=wave[fit_mask][-1]
+
+#     lamRange1 =np.array([low_mask, high_mask])
+
+
+#     if templates is None:
+#         #Read in one galaxy spec to get the velscale:
+#         example_spec=cube.data[:, 10, 10]
+#         _, _, velscale = util.log_rebin(lamRange1, example_spec[fit_mask])
+
+#         FWHM_gal=2.0
+#         #Make the templates
+#         gas_templates, lamRange2, logLam2=get_gas_emission_templates(lamRange1, velscale, FWHM_gal)
+#     else:
+#         gas_templates, lamRange2, logLam2, velscale=templates
+
+
+#     temps=gas_templates/np.max(gas_templates)
+
+#     #start values
+#     start=[0.0, 3*velscale]
+
+#     #Mask we can edit to remove bad pixels
+#     goodPixels=np.ones_like(spectrum, dtype=bool)
+
+#     if clip:
+#         clipped=S.sigma_clip(spectrum, sigma_upper=5.0, sigma_lower=1.0, iters=3)
+
+#         spectrum=clipped.filled(0.0)
+#         goodPixels[clipped.mask]=False
+
+
+#     if baseline_subtract:
+#         import continuum                        
+#         cont=continuum.fit_continuum(wave, spectrum, noise_spectrum, clip=[1, 10, 10], order=5) 
+#         spectrum-=cont
+    
+
+#     #A spectrum which is cut around the emission lines, but also has the emission lines masked out
+#     spec_for_std=spectrum[mask_for_noise_std]
+#     #RMS of this emission line free spectrum- separate noise estimate
+#     rms=np.std(spec_for_std)
+#     #Median of this spectrum
+#     baseline_noise=np.nanmedian(spec_for_std[spec_for_std!=0.0])
+
+
+
+#     loggalaxy, logLam1, velscale = util.log_rebin(lamRange1, spectrum[fit_mask])
+#     logWeights, logLam1, _=util.log_rebin(lamRange1, noise_spectrum[fit_mask])
+#     lognoise=np.ones_like(loggalaxy)*baseline_noise
+
+#     galmedian=np.abs(np.median(loggalaxy[loggalaxy!=0]))
+
+#     data=loggalaxy/galmedian
+#     noise=lognoise/galmedian
+
+
+
+#     weights=1./(1+(logWeights/galmedian)**2)
+
+#     c_light=const.c/1000.0
+#     dv=c_light*np.log(lamRange2[0]/lamRange1[0])
+
+#     try:
+#         result, bestfit=fit_kinematics(data, noise, temps, velscale, dv, weights)
+#     except:
+#         import pdb; pdb.set_trace()
+
+#     bestfit_Ha=get_just_Ha_model(result.params, temps, velscale, dv, data)
+#     bestfit_NII=get_just_NII_model(result.params, temps, velscale, dv, data)
+
+#     SN=get_SN(bestfit-result.params['offset'].value, data, noise, weights)
+
+
+#     if return_specs:
+#         return result, SN, galmedian, [data, bestfit, noise, bestfit_Ha, bestfit_NII]
+
+#     return result, SN
+
+# def make_model(params, templates, velscale, dv, data):
+
+
+#     V=params['Vel'].value
+#     SIG=params['sigma'].value
+#     HA_SCALE=params['Ha_scale'].value
+#     NII_SCALE=params['NII_scale'].value
+#     OFFSET=params['offset'].value
+
+#     model=HA_SCALE*FT.convolve_template_with_losvd(templates[:, 0], V, SIG, velscale=velscale, vsyst=dv)[:len(data)]+NII_SCALE*FT.convolve_template_with_losvd(templates[:, -1], V, SIG, velscale=velscale, vsyst=dv)[:len(data)]+OFFSET
+
+#     return model
+
+# def get_just_Ha_model(params, templates, velscale, dv, data):
+#     V=params['Vel'].value
+#     SIG=params['sigma'].value
+#     HA_SCALE=params['Ha_scale'].value
+#     NII_SCALE=params['NII_scale'].value
+#     OFFSET=params['offset'].value
+
+#     model=HA_SCALE*FT.convolve_template_with_losvd(templates[:, 0], V, SIG, velscale=velscale, vsyst=dv)[:len(data)]
+
+#     return model
+
+# def get_just_NII_model(params, templates, velscale, dv, data):
+#     V=params['Vel'].value
+#     SIG=params['sigma'].value
+#     HA_SCALE=params['Ha_scale'].value
+#     NII_SCALE=params['NII_scale'].value
+#     OFFSET=params['offset'].value
+
+#     model=NII_SCALE*FT.convolve_template_with_losvd(templates[:, -1], V, SIG, velscale=velscale, vsyst=dv)[:len(data)]
+
+#     return model
+
+
+# def objective_function(parameters, data, noise, weights, templates, velscale, dv):
+
+#     model=make_model(parameters, templates, velscale, dv, data)
+
+#     chisqs=weights*(data-model)/noise
+
+#     return chisqs
+
+# def fit_kinematics(data, noise, templates, velscale, dv, weights):
+
+
+
+
+
+
+#     params=LM.Parameters()
+#     params.add('Vel', value=0.0, vary=True, min=-500.0, max=500.0)
+#     params.add('sigma', value=3*velscale, vary=True, min=0.5*velscale[0], max=500.0)
+#     params.add('Ha_scale', value=10.0, vary=True, min=0.0, max=1000.0)
+#     params.add('NII_scale', value=10.0, vary=True, min=0.0, max=1000.0)
+#     params.add('offset', value=0.0, vary=True, min=-100, max=100)
+
+
+#     #model=make_model(params, template, velscale, dv, data)
+
+    
+#     minner = LM.Minimizer(objective_function, params, fcn_args=(data, noise, weights, templates, velscale, dv))
+#     result = minner.minimize()
+
+#     bestfit=make_model(result.params, templates, velscale, dv, data)
+
+#     return result, bestfit
+
+
+# def get_SN(bestfit, data, noise, weights):
+
+
+
+#     #Get the polynomial from pPXF
+#     #x = np.linspace(-1, 1, len(loggalaxy))
+#     #apoly = np.polynomial.legendre.legval(x, pp.polyweights)
+
+
+
+#     #emission_lines=make_model(params, template, velscale, dv, loggalaxy)
+
+#     emission_mask=bestfit>1e-3
+
+#     SN=(np.nansum(bestfit[emission_mask]*weights[emission_mask])/np.sqrt(np.nansum((noise[emission_mask]**2))))
+#     #SN=np.sum(emission_lines[emission_mask])/(baseline_noise*len(lognoise[emission_mask]))
+
+#     if not np.isfinite(SN):
+#         SN=0.0
+
+#     return SN
