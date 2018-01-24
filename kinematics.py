@@ -17,7 +17,7 @@ import scipy.constants as const
 #from spectools import *
 from stellarpops.tools import CD12tools as CT
 #from python_utils import sky_shift
-import matplotlib.pyplot as plt
+#import matplotlib.pyplot as plt
 
 #import argparse
 
@@ -28,7 +28,7 @@ from tqdm import tqdm
 #import kinematics_helper_functions as KHF
 import numpy.ma as ma
 
-import plotting as P
+#import plotting as P
 import lmfit_SPV as LMSPV
 
 class CubeKinematics(Cube):
@@ -36,23 +36,33 @@ class CubeKinematics(Cube):
 
     #A subclass of Cube to deal with the kinematics
 
-    def __init__(self, cube, bins_spectra_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Bins_and_spectra', fits_file_out_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Kinematic_and_Flux_measurements', **kwargs):
+    def __init__(self, cube, bins_spectra_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Bins_and_spectra', 
+        fits_file_out_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Kinematic_and_Flux_measurements', 
+        text_file_outname='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_txt_files',
+        **kwargs):
+
         super(self.__class__, self).__init__(cube, **kwargs)
         self.bins_spectra_path = bins_spectra_path
         self.fits_file_out_path = fits_file_out_path
-
+        self.text_file_out_path = text_file_outname
 
         #The extra attributes we'll create and fill
+        #Question- should I just call either functions to make these or functions to load these here?
 
         #After the voronoi Binning
-        self.x_coords=None
-        self.y_coords=None
+        self.x_coords_1d=None
+        self.y_coords_1d=None
+        self.x_coords_2d=None
+        self.y_coords_2d=None
+
         self.bins_1d=None
         self.bins_2d=None
+
         self.nPixels=None
         self.spectra=None
         self.noise_spectra=None
         self.bin_mask=None
+
 
         #For PPXF
         self.rest_lamdas=None
@@ -63,10 +73,14 @@ class CubeKinematics(Cube):
         self.sigmas_err=None
         self.weights=None
         self.chisqs=None
+        self.gas_templates=None
+        self.line_names=None
 
 
         #State variables
-        self.been_voronoi_binned=False
+        self.has_voronoi_bins=False
+        self.has_extracted_spectra=True
+        self.has_extracted_noise_spectra=True
         self.emission_lines_been_fit=False
 
 
@@ -104,9 +118,9 @@ class CubeKinematics(Cube):
         signal_mask=self.get_spec_mask_around_wave(0.65628*(1+self.z), 0.001)
 
         #Not a typo- x and y axes are reversed
-        self.y_coords, self.x_coords=np.indices((self.ny, self.nx))
-        self.x_coords_1d=self.x_coords.ravel()
-        self.y_coords_1d=self.y_coords.ravel()
+        self.y_coords_2d, self.x_coords_2d=np.indices((self.ny, self.nx))
+        self.x_coords_1d=self.x_coords_2d.ravel()
+        self.y_coords_1d=self.y_coords_2d.ravel()
 
 
         galmedian=np.nanmedian(self.data[signal_mask, :, :], axis=0)
@@ -117,7 +131,7 @@ class CubeKinematics(Cube):
         nan_mask=~((np.isfinite(noise))&(noise>0))
 
         #Do the binning
-        binNum, xNode, yNode, xBar, yBar, sn, nPixels, scale=V.voronoi_2d_binning(self.x_coords[~nan_mask].ravel(), self.y_coords[~nan_mask].ravel(), signal[~nan_mask].ravel(), noise[~nan_mask].ravel(), SN_TARGET, plot=False, quiet=True)
+        binNum, xNode, yNode, xBar, yBar, sn, nPixels, scale=V.voronoi_2d_binning(self.x_coords_2d[~nan_mask].ravel(), self.y_coords_2d[~nan_mask].ravel(), signal[~nan_mask].ravel(), noise[~nan_mask].ravel(), SN_TARGET, plot=False, quiet=True)
 
         #Make sure everything left unbinned has a value of -999
         #The normal output of voronoi binning just omits these pixels, meaning we don't know the length of binNum beforehand. 
@@ -128,21 +142,27 @@ class CubeKinematics(Cube):
 
         self.bin_mask=np.where(self.bins_1d>=0.0)
 
-        self.spectra, self.noise_spectra=ET.simple_extraction(self.y_coords, self.x_coords, self.bins_2d, self.data, self.noise**2, type='median')
+        self.spectra, self.noise_spectra=ET.simple_extraction(self.y_coords_2d, self.x_coords_2d, self.bins_2d, self.data, self.noise**2, type='median')
         
         outname='{}/{}_bins_spectra.fits'.format(self.bins_spectra_path, self.object_name)
 
         if save:
-            self.save_spectra(self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.spectra, self.noise_spectra, outname)
+            self.save_spectra_to_fits(self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.spectra, self.noise_spectra, self.nPixels, outname)
 
         
         self.nPixels=nPixels
-        self.been_voronoi_binned=True
-        return self.xcoords_1d, self.ycoords_1d, self.bins_1d, self.nPixels
+
+
+        self.has_extracted_spectra=True
+        self.has_extracted_noise_spectra=True
+        self.has_voronoi_bins=True
+
+        
+        return self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.nPixels
 
 
     @staticmethod
-    def save_spectra_to_fits(x, y, twoD_bins, lamdas, spectra, noise_spectra, outname, overwrite=True):
+    def save_spectra_to_fits(x, y, twoD_bins, lamdas, spectra, noise_spectra, outname, nPixels, overwrite=True):
  
 
         #Write the fits file
@@ -150,12 +170,35 @@ class CubeKinematics(Cube):
         hdu2 = fits.ImageHDU(lamdas)
         hdu3 = fits.ImageHDU(spectra)
         hdu4 = fits.ImageHDU(noise_spectra)
-        new_hdul = fits.HDUList([hdu1, hdu2, hdu3, hdu4])
+        hdu5 = fits.ImageHDU(nPixels)
+        new_hdul = fits.HDUList([hdu1, hdu2, hdu3, hdu4, hdu5])
 
         new_hdul.writeto('{}'.format(outname), overwrite=overwrite)
 
         return new_hdul
 
+    def load_voronoi_bin_attributes(self, filename):
+        """Load values of voronoi bins from a fits file and assign them to class attributes"""
+
+        hdul=fits.open(filename)
+
+        self.x_coords_1d, self.y_coords_1d, self.bins_1d=hdul[0].data
+        #FIXME- assign lamdas here?
+        self.lamdas=hdul[1].data
+        self.spectra=hdul[2].data
+        self.noise_spectra=hdul[3].data
+        self.nPixels=hdul[4].data
+
+        #assign the other attributes we need
+
+        self.bin_mask=np.where(self.bins_1d>=0.0)
+        self.bins_2d=self.bins_1d.reshape(self.ny, self.nx)
+        self.x_coords_2d = self.x_coords_1d.reshape(self.ny, self.nx)
+        self.y_coords_2d = self.y_coords_1d.reshape(self.ny, self.nx)
+
+        self.has_extracted_spectra=True
+        self.has_extracted_noise_spectra=True
+        self.has_voronoi_bins=True
 
     #Emission Line Fitting
     @staticmethod
@@ -233,28 +276,33 @@ class CubeKinematics(Cube):
         return hdu_extensions
 
 
-    def fit_emission_lines(self, text_file_outname, plot=False):
+    def fit_emission_lines(self, save=True, plot=False):
 
         """
         Fit emission lines to the spectra of a K-CLASH observation
         """
         # bin_information, lamdas, spectra, noise_spectra=self.get_bins_and_spectra(self.bins_spectra_path, self.object_name)
 
+        if not self.has_extracted_spectra:
+            raise AttributeError("You can't run fit_emission_lines without a set of spectra extracted from (e.g voronoi) bins")
+        elif not self.has_extracted_noise_spectra:
+            raise AttributeError("You can't run fit_emission_lines without a set of noise spectra extracted from (e.g voronoi) bins")
+
         nbins=self.spectra.shape[0]
         #Convert to angstroms and de-redshift
         self.rest_lamdas=self.lamdas*(10**4/(1+self.z))
 
-        lamRange_galaxy=[rest_lamdas[0], rest_lamdas[-1]]
+        lamRange_galaxy=[self.rest_lamdas[0], self.rest_lamdas[-1]]
         
 
 
         #Get the velscale
         _, _, self.velscale=util.log_rebin(lamRange_galaxy, self.spectra[0, :])
         #And the FWHM of the galaxy
-        FWHM_gal = 2.0/(1+z)
+        FWHM_gal = 2.0/(1+self.z)
 
         #Load the gas templates
-        gas_templates, line_names, line_wave, lamRange_template=self.load_gas_templates(lamRange_galaxy, self.velscale, FWHM_gal)
+        self.gas_templates, self.line_names, line_wave, lamRange_template=self.load_gas_templates(lamRange_galaxy, self.velscale, FWHM_gal)
 
 
         
@@ -264,14 +312,11 @@ class CubeKinematics(Cube):
         self.vel_err=np.empty(nbins)
         self.sigmas=np.empty(nbins)
         self.sigmas_err=np.empty(nbins)
-        self.weights=np.empty((nbins, gas_templates.shape[-1]))
+        self.weights=np.empty((nbins, self.gas_templates.shape[-1]))
         self.chisqs=np.empty(nbins)
 
 
-        #Clear the filename
-        results_filename='{}/{}_results.txt'.format(text_file_outname, self.object_name)
-        with open(results_filename, "w") as f:   
-            pass
+
         
         #Fit each spectrum with pPXF
         for i, (spectrum, noise_spectrum) in enumerate(tqdm(zip(self.spectra, self.noise_spectra), leave=False)):
@@ -285,6 +330,10 @@ class CubeKinematics(Cube):
             ##Mask pixels
             #Make a mask the correct length...
             mask=np.ones_like(log_galaxy, dtype='bool')
+
+            run_ppxf=True
+            if not np.any(log_noise>0.0):
+                run_ppxf=False
 
             #... and mask all noise elements which are 0...
             zero_noise=log_noise<=0.0
@@ -304,13 +353,17 @@ class CubeKinematics(Cube):
             start=[0,3*self.velscale[0]]
 
             #Call ppxf
-            pp = ppxf.ppxf(gas_templates, log_galaxy, log_noise, self.velscale, start, plot=False, moments=2, degree=4, vsyst=dv, clean=True, quiet=True)
-
+            if run_ppxf:
+                pp = ppxf.ppxf(self.gas_templates, log_galaxy, log_noise, self.velscale, start, plot=False, moments=2, degree=4, vsyst=dv, clean=True, quiet=True)
+                chi2=pp.chi2
+            else:
+                #If we have a bad spectrum, set the chi_squared to be huge and catch it in the bad results below 
+                chi2=10000000
 
             #Only save the results if the ChiSquared is good
 
 
-            if pp.chi2<5:
+            if chi2<5:
                 self.vel[i]=pp.sol[0]
                 self.vel_err[i]=pp.error[0]*np.sqrt(pp.chi2)
                 self.sigmas[i]=pp.sol[1]
@@ -342,30 +395,37 @@ class CubeKinematics(Cube):
                 #     ax.plot(self.lamdas, pp.bestfit, c=line.get_color(), linewidth=2.0,  linestyle='dotted')
 
 
-        #TODO:
-        #Move this into a separate function
+
+        if save:
+            self.save_ppxf_results_to_text_file(self.text_file_outname)
+            self.save_ppxf_results_to_MEF(self.fits_file_out_path)
+
+        self.emission_lines_been_fit=True
 
 
 
+
+    def save_ppxf_results_to_text_file(self, out_file_path):
+    #Clear the filename
+    
+        results_filename='{}/{}_results.txt'.format(out_file_path, self.object_name)
         #Saving things to our text file
-        with open(results_filename, "a") as f:             
+        with open(results_filename, "w") as f:             
             np.savetxt(f, np.column_stack((self.vel, self.vel_err, self.sigmas, self.sigmas_err, self.weights, self.chisqs)))#, delimiter='\t', newline='\t')
+
+
+
+    def save_ppxf_results_to_MEF(self, out_file_path):
+        #The list which we'll fill with fits extensions
+        hdu_extensions=[]
 
         #Saving everything to a Multi extension fits file
         kinematic_quantities=['Velocity', 'VelocityError', 'Sigma', 'SigmaError', 'Chisq']
 
-      
-
-
-
-
-        #The list which we'll fill with fits extensions
-        hdu_extensions=[]
-
         #Empty primary HDU
         #Just to have a header containing all the info
         hdu_primary=fits.PrimaryHDU()
-        for i, label in enumerate(['VoronoiBins'] + kinematic_quantities + line_names.tolist()):
+        for i, label in enumerate(['VoronoiBins'] + kinematic_quantities + self.line_names.tolist()):
             hdu_primary.header['EXT{}'.format(i+1)]=label
         hdu_extensions.append(hdu_primary)
 
@@ -378,14 +438,16 @@ class CubeKinematics(Cube):
         hdu_extensions.extend(self.make_MEF_of_quantities([self.vel, self.vel_err, self.sigmas, self.sigmas_err, self.chisqs], kinematic_quantities))
 
         #Weights of templates
-        hdu_extensions.extend(self.make_MEF_of_quantities(self.weights.T, line_names))
+        hdu_extensions.extend(self.make_MEF_of_quantities(self.weights.T, self.line_names))
 
         final_fits_file = fits.HDUList(hdu_extensions)
-        final_fits_file.writeto('{}/{}_kin_flux.fits'.format(self.fits_file_out_path, self.object_name), overwrite=True)
+        final_fits_file.writeto('{}/{}_kin_flux.fits'.format(out_file_path, self.object_name), overwrite=True)
 
 
 
-        self.emission_lines_been_fit=True
+        
+
+
 
 
 

@@ -14,7 +14,7 @@ import lmfit as LM
 import scipy.constants as const
 from stellarpops.tools import fspTools as FT
 
-import plotting as P
+#import plotting as P
 
 def twoD_Gaussian_list((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
     xo = float(xo)
