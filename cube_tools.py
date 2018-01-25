@@ -174,7 +174,7 @@ class Cube(object):
                 warnings.warn("No emission found to get an accurate z. Setting z=0.0")
                 self.z=0.0
         else:
-            warnings.warn("No data found for {}".format(self.object_name))
+            raise NameError("No data found for {}".format(self.object_name))
 
 
         # #Get the IFU arm, if we have it:
@@ -236,7 +236,7 @@ class Cube(object):
         self.quick_spec=np.nanmedian(np.nanmedian(self.data, axis=2), axis=1)
 
         #Set the pixel scale
-        self.pix_scale=self.pri_header['HIERARCH ESO PRO REC1 PARAM8 VALUE']
+        self.pix_scale=float(self.pri_header['HIERARCH ESO PRO REC1 PARAM8 VALUE'])
 
         #The cube hasn't been collapsed yet
         self.collapsed=None
@@ -849,7 +849,7 @@ class Cube(object):
         This works IN PLACE! So it overwrites cube.data, cube.noise and cube.nx, cube.ny.
         """
 
-        if self.pix_scale != 0.2:
+        if self.pix_scale == 0.2:
             import scipy.interpolate as si
 
             x=np.arange(self.nx)
@@ -874,28 +874,34 @@ class Cube(object):
 
             #Ensure the flux in each wavelength slice is the same
 
-            old_flux=np.nansum(np.nansum(self.data, axis=1), axis=1)
+            old_flux=np.nansum(np.nansum(self.data, axis=2), axis=1)
             new_flux=np.nansum(np.nansum(new_cube, axis=2), axis=1)
 
-            ratio=old_flux/new_flux
+            old_noise_values=np.nansum(np.nansum(self.noise, axis=2), axis=1)
+            new_noise_values=np.nansum(np.nansum(new_noise, axis=2), axis=1)
 
-            ratio[~np.isfinite(ratio)]=1.0
-            ratio[ratio<0.0]=1.0
+            flux_ratio=old_flux/new_flux
+            noise_ratio=old_noise_values/new_noise_values
 
-            ratio_cube=np.repeat(ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
+            flux_ratio[~np.isfinite(flux_ratio)]=1.0
+            noise_ratio[~np.isfinite(noise_ratio)]=1.0
+
+
+            flux_ratio_cube=np.repeat(flux_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
+            noise_ratio_cube=np.repeat(noise_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
 
             
 
-            self.data=new_cube*ratio_cube
-            self.noise=new_noise*ratio_cube
+            self.data=new_cube*flux_ratio_cube
+            self.noise=new_noise*noise_ratio_cube
             self.nx=x_new.shape[0]
             self.ny=y_new.shape[0]
 
             self.pix_scale=0.1
-            return new_cube*ratio_cube, new_noise*ratio_cube
+            return new_cube*flux_ratio_cube, new_noise*noise_ratio_cube
 
         else:
-            warnings.warn('Pixel scale is {}, so interpolation has already been done!'.format(self.pix_scale))
+            warnings.warn('Pixel scale is {}, so cannot interpolate!'.format(self.pix_scale))
 
 
 

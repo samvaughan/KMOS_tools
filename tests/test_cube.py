@@ -1,5 +1,5 @@
 import unittest
-from ..cube_tools import Cube
+from KMOS_tools.cube_tools import Cube
 import numpy as np 
 
 class TestCubeFunctions(unittest.TestCase):
@@ -15,18 +15,24 @@ class TestCubeFunctions(unittest.TestCase):
         old_shape=(self.cube.nx, self.cube.ny)
         new_cube, new_noise=self.cube.interpolate_point_1_arcsec_sampling()
 
-        new_shape=(cube.nx, cube.ny)
+        new_shape=(self.cube.nx, self.cube.ny)
 
-        self.assertEqual(((2*new_shape[0], 2*new_shape[1]), old_shape, "Cube dimensions haven't doubled"))
+
+        self.assertEqual((2*old_shape[0], 2*old_shape[1]), new_shape, "Cube dimensions haven't doubled")
 
     def test_arcesond_interpolation_flux_sum(self):
 
-        """Test to check that the flux in consereved after interpolation"""
+        """Test to check that the flux is conserved after interpolation"""
         old_data=self.cube.data.copy()
 
         new_cube, new_noise=self.cube.interpolate_point_1_arcsec_sampling()
 
-        self.assertEqual(np.nansum(np.nansum(old_data, axis=2), axis=1), np.nansum(np.nansum(new_cube, axis=2), axis=1), "Sum of the flux in the old cube and interpolated cube is different")
+        old_sum_spec=np.nansum(np.nansum(old_data, axis=2), axis=1)
+        new_sum_spec=np.nansum(np.nansum(new_cube, axis=2), axis=1)
+
+
+
+        self.assertTrue(np.allclose(old_sum_spec, new_sum_spec, rtol=1e-25, atol=1e-25), "Sum of the flux in the old cube and interpolated cube is different by more than 1e-25")
 
     def test_arcesond_interpolation_noise_sum(self):
 
@@ -35,7 +41,10 @@ class TestCubeFunctions(unittest.TestCase):
 
         new_cube, new_noise=self.cube.interpolate_point_1_arcsec_sampling()
 
-        self.assertEqual(np.nansum(np.nansum(old_noise, axis=2), axis=1), np.nansum(np.nansum(new_cube, axis=2), axis=1), "Sum of the noise in the old cube and interpolated cube is different")
+        old_sum_spec=np.nansum(np.nansum(old_noise, axis=2), axis=1)
+        new_sum_spec=np.nansum(np.nansum(new_noise, axis=2), axis=1)
+
+        self.assertTrue(np.allclose(old_sum_spec, new_sum_spec, rtol=1e-25, atol=1e-25), "Sum of the noise in the old cube and interpolated cube is different by more than 1e-25")
 
     
     def test_collapse_cube_flag(self):
@@ -52,7 +61,25 @@ class TestCubeFunctions(unittest.TestCase):
         """The collapsed Cube should be 2d"""
 
         self.cube.collapse()
-        self.assertEqual(len(self.cube.collapse.shape), 2, "Collapsed Cube isn't 2D")
+        self.assertEqual(len(self.cube.collapsed.shape), 2, "Collapsed Cube isn't 2D")
+
+
+    #Test all the cube's attributes
+    def test_ndims(self):
+        """Ndims should be a float"""
+        self.assertIs(type(self.cube.ndims), int)
+
+    def test_pix_scale(self):
+        """Ndims should be a float"""
+        self.assertIs(type(self.cube.pix_scale), float)
+
+    def test_nx(self):
+        """nx should be an int"""
+        self.assertIs(type(self.cube.nx), int)
+
+    def test_ny(self):
+        """ny should be a float"""
+        self.assertIs(type(self.cube.ny), int)
 
 
 

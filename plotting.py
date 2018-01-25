@@ -1,6 +1,15 @@
 from cube_tools import Cube
 import numpy as np 
 import matplotlib.pyplot as plt 
+import matplotlib.gridspec as gridspec
+import matplotlib.image as mpimg
+from voronoi_binning.display_pixels.sauron_colormap import sauron
+
+import lmfit_SPV as LMSPV
+
+import kin_functions as KF
+from scipy import ndimage as ndi
+
 
 
 class CubePlot(Cube):
@@ -43,7 +52,7 @@ class CubePlot(Cube):
         return ax
 
 
-def display_kinematics(cube, fits_file_out_path, nPixels, plot=False):
+def display_kinematics(cube, vel, sigma, H_alpha, N2, bins, nPixels):
 
     """
     Display the kinematics of a K-CLASH cube in a handy format
@@ -51,7 +60,7 @@ def display_kinematics(cube, fits_file_out_path, nPixels, plot=False):
 
 
     #Load the kinematics and flux measurements
-    hdu_list=fits.open('{}/{}_kin_flux.fits'.format(fits_file_out_path, cube.object_name))
+    #hdu_list=fits.open('{}/{}_kin_flux.fits'.format(fits_file_out_path, cube.object_name))
     
 
     #Load the plot settings file
@@ -114,10 +123,10 @@ def display_kinematics(cube, fits_file_out_path, nPixels, plot=False):
     #Plot the images from the kinematic fits
     #Loop through the axes, in the order Velocity, Sigma, H-alpha weight, NII weight
     #Also loop through titles, the extra kwargs which we pass to imshow and the labels for the colorbars
-    for i, (image, ax, title, kwargs, label) in enumerate(zip([hdu_list[2].data, hdu_list[4].data, hdu_list[7].data, hdu_list[-1].data], axs.flatten(), titles, extra_args, labels)):
+    for i, (image, ax, title, kwargs, label) in enumerate(zip([vel, sigma, H_alpha, N2], axs.flatten(), titles, extra_args, labels)):
 
 
-        bins=hdu_list[1].data
+
         good_bins=np.where(nPixels>15.0)
 
         # #Get indices which correspond to the good bins
@@ -143,78 +152,74 @@ def display_kinematics(cube, fits_file_out_path, nPixels, plot=False):
         
 
 
-    if plot:
-        plt.show()
-    else:
-        plt.close('all')
+    # if plot:
+    #     plt.show()
+    # else:
+    #     plt.close('all')
 
     return fig, ax
 
 
-def plot_model(cube, params, data, errors, chain_samples, x, y, bins):
 
 
-    r_e=cube.table['r50_int_z']#/cube.table['pixscale']
+
+
+def plot_model(params, data, errors, x, y, bins, r_e, stds):
+
+
+    
     #Do this better!
     FWHM_seeing=0.5
     r22_disk=np.sqrt((1.3*r_e)**2 + (FWHM_seeing/2.35)**2)
     r3_disk=np.sqrt((1.8*r_e)**2 + (FWHM_seeing/2.35)**2)
 
-    model=velfield(params, data)
+    model=KF.make_binned_model(params, data, x, y, bins)
+    #Make an unbinned one
+    smooth_model=KF.velfield(params, data)
     # m[data.mask]=np.nan
     # model=ma.masked_invalid(m)
 
-    max_y, max_x=data.shape
+    
 
     yc=int(params['yc'].value)
     xc=int(params['xc'].value)
+    v0=params['v0']
     PA=params['PA'].value
+    max_y, max_x=data.shape
 
+    final_data=KF.shift_rotate_velfield(data.filled(-9999), [max_x/2-xc, max_y/2-yc], PA, order=0)
+    final_errors=KF.shift_rotate_velfield(errors.filled(-9999), [max_x/2-xc, max_y/2-yc], PA, order=0)
+    final_model=KF.shift_rotate_velfield(model, [max_x/2-xc, max_y/2-yc], PA, order=0)
 
+    final_smooth_model=KF.shift_rotate_velfield(smooth_model, [max_x/2-xc, max_y/2-yc], PA, order=0)
 
-    shifted_data=ndi.shift(data.filled(-9999), [max_x/2-xc, max_y/2-yc], mode='nearest', order=0)
-    shifted_model=ndi.shift(model, [max_x/2-xc, max_y/2-yc], mode='nearest', order=3)
-    shifted_errors=ndi.shift(errors.filled(-9999), [max_x/2-xc, max_y/2-yc], mode='nearest', order=0)
-
-    final_data=ndi.rotate(shifted_data,PA, reshape=False,mode='nearest', order=0)
-    final_model=ndi.rotate(shifted_model,PA, reshape=False,mode='nearest', order=3)
-    final_errors=ndi.rotate(shifted_errors,PA, reshape=False,mode='nearest', order=0)
-    #final_residuals=ndi.rotate(data.filled(-9999)-model.filled(-9999),PA, reshape=False,mode='nearest', order=0)
-
-
-
-    nan_mask=final_data<-9000
+    nan_mask=final_data< -9000
     final_data[nan_mask]=np.nan
     final_model[nan_mask]=np.nan
     final_errors[nan_mask]=np.nan
     final_residuals=final_data-final_model
-
-    x, y=np.indices((bins.shape[0], bins.shape[1]))
-    bins=bins.astype(int)
-    bin_mask=np.where(bins>=0)
-    final_binned_model=display_binned_quantity(x[bin_mask], y[bin_mask], final_model.ravel()[bins[bin_mask]])
-    import pdb; pdb.set_trace()
-    
-    v_profile, v_obs, v_err, [x_slit, y_slit]=get_slit_profile(params, final_data, final_model, final_errors)
+  
+    v_profile, v_obs, v_err, [x_slit, y_slit]=KF.get_slit_profile(params, final_data-v0, final_smooth_model-v0, final_errors)
 
 
     #########################################################################################################
     #Plotting
 
-    min_vel=np.nanmin(model)
-    max_vel=np.nanmax(model)
+    min_vel=1.2*np.nanmin(final_model-v0)
+    assert min_vel<0.0, "Need to ensure we're around 0!"
+    max_vel=-1.0*min_vel
 
     fig, axs=plt.subplots(nrows=1, ncols=4, figsize=(18, 5))   
     cbaxes = fig.add_axes([0.1, 0.1, 0.01, 0.8])
 
-    img=axs[0].imshow(final_data, origin='lower', cmap=sauron, vmin=min_vel, vmax=max_vel)
+    img=axs[0].imshow(final_data-v0, origin='lower', cmap=sauron, vmin=min_vel, vmax=max_vel)
     cbar=fig.colorbar(img, cax=cbaxes)
     cbar.set_label(label=r'$V_{\mathrm{rot}}$ (kms$^{-1}$)', fontsize=15)
         
     cbaxes.yaxis.set_label_position('left')
     cbaxes.yaxis.set_ticks_position('left')
 
-    axs[1].imshow(final_binned_model, origin='lower', cmap=sauron, vmin=min_vel, vmax=max_vel)
+    axs[1].imshow(final_model-v0, origin='lower', cmap=sauron, vmin=min_vel, vmax=max_vel)
     axs[2].imshow(final_residuals, origin='lower', cmap=sauron, vmin=min_vel, vmax=max_vel)
     axs[2].tick_params(axis='both', which='both', labelbottom='off', labelleft='off')
 
@@ -224,31 +229,6 @@ def plot_model(cube, params, data, errors, chain_samples, x, y, bins):
     axs[3].errorbar((x_slit-xc)*0.1, v_obs, yerr=v_err, c='k', marker='o')
     #axs[3].set_ylim([min_vel-20, max_vel+20])
   
-
-    #Overlay error regions for the fit
-    ndraws=1000
-    variables=[p for p in params]
-    all_profiles=np.empty((len(v_profile), ndraws))
-    for i, pars in enumerate(chain_samples[np.random.randint(len(chain_samples), size=ndraws)]):
-        
-        sample_pars=LMSPV.Parameters()
-        for p, name in zip(pars, variables):
-            sample_pars.add(name, value=p)
-        sample_pars['PA'].set(params['PA'].value)
-        
-        p_xc=sample_pars['xc']
-        p_yc=sample_pars['yc']
-        model=velfield(sample_pars, data)
-        shifted_model=ndi.shift(model, [max_x/2-p_xc, max_y/2-p_yc], mode='nearest', order=3)
-        final_model=ndi.rotate(shifted_model,PA, reshape=False,mode='nearest', order=3)
-        final_model[nan_mask]=np.nan
-
-        v_p, v_obs, v_err, [_, _]=get_slit_profile(sample_pars, final_data, final_model, final_errors)
-        all_profiles[:, i]=v_p
-    
-    stds=2.0*np.nanstd((all_profiles-v_profile[:, None]), axis=1)
-    #old_stds=2.0*np.nanstd(all_profiles, axis=1)
-    #import pdb; pdb.set_trace()
     axs[3].fill_between((x_slit-xc)*0.1, v_profile-stds, v_profile+stds, facecolor='r', alpha=0.2)
 
 
@@ -293,4 +273,4 @@ def plot_model(cube, params, data, errors, chain_samples, x, y, bins):
     fig.subplots_adjust(hspace=0.2, wspace=0.16)
 
 
-    return (fig, axs), stds
+    return (fig, axs)
