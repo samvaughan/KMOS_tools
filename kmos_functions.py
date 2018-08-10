@@ -12,7 +12,7 @@ readline.parse_and_bind("tab: complete")
 
 
 def multiple_log(message):
-    print message
+    print(message)
     logging.info(message)
 
 
@@ -112,11 +112,11 @@ def SAM_create_sof(filelist, recipe_name, calibration_location=None, reduced_dar
         raise NameError("Empty List")
         return
     # Same band ?
-    if len(set(map(lambda x: x['band'], filelist))) != 1 :
+    if len(set([x['band'] for x in filelist])) != 1 :
         raise NameError("Different bands in this sof")
         return
     # Same tpl_id ?
-    if len(set(map(lambda x: x['tpl_id'], filelist))) != 1 :
+    if len(set([x['tpl_id'] for x in filelist])) != 1 :
         raise NameError("Different TPL_IDs in this sof")
         return
 

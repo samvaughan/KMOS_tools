@@ -8,15 +8,15 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 import astropy.stats as S
 
-from ppxf.cap_mpfit import mpfit
-
+import os
 import lmfit as LM   
 import scipy.constants as const
 from stellarpops.tools import fspTools as FT
 
 #import plotting as P
 
-def twoD_Gaussian_list((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
+def twoD_Gaussian_list(position, amplitude, xo, yo, sigma_x, sigma_y, theta, offset):
+    (x, y) = position
     xo = float(xo)
     yo = float(yo)    
     a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
@@ -28,6 +28,10 @@ def twoD_Gaussian_list((x, y), amplitude, xo, yo, sigma_x, sigma_y, theta, offse
 
 def twoD_Gaussian_with_slope(params, X, Y):
 
+    """
+    Adapted from https://stackoverflow.com/questions/21566379/fitting-a-2d-gaussian-function-using-scipy-optimize-curve-fit-valueerror-and-m/21566831
+    """
+
     xo = params['X']
     yo = params['Y']
     theta = params['ROTATION']
@@ -38,9 +42,9 @@ def twoD_Gaussian_with_slope(params, X, Y):
     slope_X = params['X_GRAD']
     slope_Y = params['Y_GRAD']
 
-    a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
-    b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
-    c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+    a = (np.cos(theta)**2)/(2*sigma_y**2) + (np.sin(theta)**2)/(2*sigma_x**2)
+    b = -(np.sin(2*theta))/(4*sigma_y**2) + (np.sin(2*theta))/(4*sigma_x**2)
+    c = (np.sin(theta)**2)/(2*sigma_y**2) + (np.cos(theta)**2)/(2*sigma_x**2)
 
 
     g = offset + slope_X*X +slope_Y*Y + amplitude*np.exp( - (a*((X-xo)**2) + 2*b*(X-xo)*(Y-yo) 
@@ -63,6 +67,8 @@ def twoD_Gaussian(params, X, Y):
     a = (np.cos(theta)**2)/(2*sigma_x**2) + (np.sin(theta)**2)/(2*sigma_y**2)
     b = -(np.sin(2*theta))/(4*sigma_x**2) + (np.sin(2*theta))/(4*sigma_y**2)
     c = (np.sin(theta)**2)/(2*sigma_x**2) + (np.cos(theta)**2)/(2*sigma_y**2)
+    
+
     g = offset + amplitude*np.exp( - (a*((X-xo)**2) + 2*b*(X-xo)*(Y-yo) 
                             + c*((Y-yo)**2)))
 
@@ -85,7 +91,7 @@ def moments(data):
     height = np.nanmax(data)
 
     theta=np.pi/2.0
-    offset=np.nanmedian(data)
+    offset=np.nanmedian(data[data!=0.0])
     width_x=2.0
     width_y=2.0
 
@@ -96,13 +102,6 @@ def moments(data):
 
 
 
-def get_av_seeing(opt, pixel_scale=0.2):
-    """
-    Get average seeing in x and y directions from fitting a gaussian to a point source. 
-    Take sqrt(sigma_x**2+sigma_y**2) of the best fitting Gaussian and multiply by the pixel scale.
-    """
-
-    return pixel_scale*np.sqrt(opt[3]**2+opt[4]**2)
 
 
 
@@ -155,26 +154,30 @@ class Cube(object):
 
 
 
+        if not 'ARMSTAR' in self.object_name.upper():
            
-        data=self.get_KMOS_fits_data(self.object_name)
-        if data is not None:
-            self.Ha_flag=bool(data['Detected Emission?'])
-            self.continuum_flag=bool(data['Detected Continuum?'])
-            self.Ha_lam=float(data['Lamda_Ha'])
-            self.other_lines_flag=bool(data['Other lines?'])
-            self.cluster=data['Cluster_2']
-            self.quadrant=data['Quadrant']
-            self.skysub_method=data['SkySub']
-            self.cubecomments=data['Comment']
+            data=self.get_KMOS_fits_data(self.object_name)
+            if data is not None:
+                self.Ha_flag=bool(data['Detected Emission?'])
+                self.continuum_flag=bool(data['Detected Continuum?'])
+                self.Ha_lam=float(data['Lamda_Ha'])
+                self.other_lines_flag=bool(data['Other lines?'])
+                self.cluster=data['Cluster_2']
+                self.quadrant=data['Quadrant']
+                self.skysub_method=data['SkySub']
+                self.cubecomments=data['Comment']
 
-            self.table=data
-            if self.Ha_flag:
-                self.z=(self.Ha_lam/0.65628)-1.0
+                self.table=data
+                if self.Ha_flag:
+                    self.z=(self.Ha_lam/0.65628)-1.0
+                else:
+                    warnings.warn("No emission found to get an accurate z. Setting z=0.0")
+                    self.z=0.0
             else:
-                warnings.warn("No emission found to get an accurate z. Setting z=0.0")
-                self.z=0.0
+                raise NameError("No data found for {}".format(self.object_name))
         else:
-            raise NameError("No data found for {}".format(self.object_name))
+            self.z=0.0
+            warnings.warn("No spectroscopic data for an arm star. Setting z=0.0")
 
 
         # #Get the IFU arm, if we have it:
@@ -202,7 +205,7 @@ class Cube(object):
             self.lam_unit=self.header['CUNIT1']
             #Rotate the cube so the wavelength axis is first.
             self.lam_axis=0
-            print 'Rolling the cube so the wavelength axis is first'
+            print('Rolling the cube so the wavelength axis is first')
             self.data=np.rollaxis(self.data, 2, 0)
 
 
@@ -217,7 +220,7 @@ class Cube(object):
 
             #Rotate the cube so the wavelength axis is first.
             self.lam_axis=0
-            print 'Rolling the cube so the wavelength axis is first'
+            print('Rolling the cube so the wavelength axis is first')
             self.data=np.rollaxis(self.data, 1, 0)
 
         elif self.header['CTYPE3'] == 'WAVE':
@@ -249,7 +252,7 @@ class Cube(object):
     @staticmethod
     def get_KMOS_csv_data(object_name):
 
-        data=np.genfromtxt('/Data/KCLASH/KCLASH_cube_data.csv', delimiter=',', dtype=str, skip_header=1, autostrip=True)
+        data=np.genfromtxt(os.path.expanduser('~/z/Data/KCLASH/KCLASH_cube_data.csv'), delimiter=',', dtype=str, skip_header=1, autostrip=True)
         
         
         galaxies=list(data[:, 0])
@@ -264,20 +267,49 @@ class Cube(object):
     @staticmethod 
     def get_KMOS_fits_data(object_name):
 
-        hdu=fits.open('/Data/KCLASH/KCLASH_all_parameters.fits')
-        data=hdu[1].data
-        
-        
-        mask=data['Galaxy Name']==object_name
-        n_results=len(np.where(mask==True)[0])
-        if n_results==1:
-            return data[mask]
+        from astropy.table import Table
+        import pandas as pd
+
+        dat=Table.read(os.path.expanduser('~/z/Data/KCLASH/KCLASH_all_parameters.fits'), format='fits')
+        df=dat.to_pandas()
+
+        if isinstance(df.name.iloc[0], bytes):
+            names=df['name'].str.decode("utf-8")
+        elif isinstance(df.name.iloc[0], str):
+            names=df.name.values
         else:
-            warnings.warn('Found {} entries for {}'.format(n_results, object_name))
-            return None
+            raise TypeError('What type is names? Neither bytes nor string!')
+
+        #names = df.apply(lambda x: x.str.decode("utf-8") if x.dtype == "object" else x)['name'].values
+        
+        index=pd.Index(names)
+        df=df.set_index(index)
 
         
+        return df.loc[object_name]
+        # mask=data['Galaxy Name']==object_name
+        # n_results=len(np.where(mask==True)[0])
+        # if n_results==1:
+        #     return data[mask]
+        # else:
+        #     warnings.warn('Found {} entries for {}'.format(n_results, object_name))
+        #     return None
 
+    @staticmethod    
+    def get_all_KMOS_fits_data(fname=os.path.expanduser('~/z/Data/KCLASH/KCLASH_all_parameters.fits')):
+
+        from astropy.table import Table
+        import pandas as pd
+
+        dat=Table.read(fname, format='fits')
+        df=dat.to_pandas() 
+
+        names = df.apply(lambda x: x.str.strip() if x.dtype == "object" else x)['name'].values
+        index=pd.Index(names)
+        df=df.set_index(index)
+
+        
+        return df
 
 
 
@@ -326,20 +358,25 @@ class Cube(object):
             save_args: Dict. Extra args to pass to save_collapsed_cube.
 
         """
+
         if wavelength_mask is not None:
-            self.collapsed=collapse_func(self.data[wavelength_mask, :, :], axis=self.lam_axis)
+            im=collapse_func(self.data[wavelength_mask, :, :], axis=self.lam_axis)
         else:
-            self.collapsed=collapse_func(self.data, axis=self.lam_axis)
+            im=collapse_func(self.data, axis=self.lam_axis)
 
         if plot:
-            fig, ax=self.plot_collaped_cube(savename=savename, **plot_args)
+            fig, ax=self.plot_collapsed_cube(savename=savename, **plot_args)
             return fig, ax
         if savename is not None:
             raise ValueError('Code not yet written!!')
 
         self.has_been_collapsed=True
 
-    def plot_collaped_cube(self, fig=None, ax=None, savename=None, **kwargs):
+        self.collapsed=im
+        return im
+
+
+    def plot_collapsed_cube(self, fig=None, ax=None, savename=None, **kwargs):
 
         if ax is None or ax is None:
             fig, ax=plt.subplots(figsize=(10, 10))
@@ -666,21 +703,18 @@ class Cube(object):
 
 
 
-    def fit_gaussian(self, fit_funct=twoD_Gaussian, method='leastsq', clip=False):
+    def fit_gaussian(self, fit_funct=twoD_Gaussian, im=None,  method='leastsq', clip=False):
 
         """
         Fit a Gaussian to a 2D collapsed cube using lmfit
         """
+        if im is None:
+            if self.collapsed is not None:
+                im=self.collapsed
+            else:
+                self.collapse()
+                im=self.collapsed
 
-        
-        
-
-        
-        try:
-            collapsed_cube=self.collapsed
-        except AttributeError:
-            self.collapse()
-            collapsed_cube=self.collapsed
 
 
         xmin=2
@@ -688,7 +722,9 @@ class Cube(object):
         ymin=2
         ymax=-2
 
-        image=collapsed_cube.copy()[xmin:xmax, ymin:ymax]
+
+
+        image=im.copy()[xmin:xmax, ymin:ymax]
         errors=np.sqrt(np.nansum(self.noise[:, xmin:xmax, ymin:ymax]**2, axis=0))
         errors[errors<=0.0]=100 
 
@@ -696,6 +732,10 @@ class Cube(object):
 
         #Tidy up the image so we have no infs or nans
         image[~np.isfinite(image)]=0.0
+        #FIXME
+        #Not sure this is going to work properly...
+        #errors[image<=0.0]=100 
+        #image[image<0.0]=0.0
 
         if clip:
             clipped_img=S.sigma_clip(image, sigma_lower=2.0, sigma_upper=3.0, iters=3)
@@ -704,26 +744,27 @@ class Cube(object):
         
         #Initial Guess. Use the maxval of the image for the Gaussian height. Maybe use mean instead?
         #Best guess is centre, with sigma of 2 in each direction. Theta is 0.0 and so is the overall y offset
-        max_val=np.nanmax(self.collapsed)
-
         #Normalise things to avoid having some parameters at 1e-20 and others at 1
-        median=np.abs(np.median(image))
-        image/=median
-        errors/=median
+        median=np.abs(np.median(image[image!=0.0]))
+        medianed_image=image/median
+        medianed_errors=errors/median
 
 
         initial_guess=moments(image)
 
         params=LM.Parameters()
-        params.add('Amp', value=initial_guess[0], min=1e-3)
-        params.add('X', value=initial_guess[1], min=0.5, max=image.shape[1]-0.5)
-        params.add('Y', value=initial_guess[2], min=0.5, max=image.shape[0]-0.5)
+        params.add('Amp', value=initial_guess[0]/median, min=1e-3)
+        params.add('X', value=initial_guess[2], min=0.5, max=image.shape[1]-0.5)
+        params.add('Y', value=initial_guess[1], min=0.5, max=image.shape[0]-0.5)
         params.add('XWIDTH', value=initial_guess[3], min=0.1, max=6.0)
         params.add('YWIDTH', value=initial_guess[4], min=0.1, max=6.0)
         params.add('ROTATION', value=initial_guess[5], min=0.0, max=2*np.pi)
-        params.add('OFFSET', value=initial_guess[6])
+        params.add('OFFSET', value=initial_guess[6]/median)
         params.add('X_GRAD', value=0.0) 
         params.add('Y_GRAD', value=0.0) 
+
+
+
 
         def lmfitfun(p, data, err, X, Y):
             return (data.ravel()-twoD_Gaussian_with_slope(p, X, Y).ravel())/err.ravel()
@@ -731,7 +772,7 @@ class Cube(object):
 
 
 
-        minimiser = LM.Minimizer(lmfitfun, params, fcn_args=(image, errors, X, Y))
+        minimiser = LM.Minimizer(lmfitfun, params, fcn_args=(medianed_image, medianed_errors, X, Y))
         result = minimiser.minimize(method=method)   
 
 
@@ -747,11 +788,13 @@ class Cube(object):
         result.params['X'].set(value=result.params['X']+xmin, min=0.0, max=image.shape[1])
         result.params['Y'].set(value=result.params['Y']+ymin, min=0.0, max=image.shape[0])
 
-        #import pdb; pdb.set_trace()
+
 
         return image, errors, minimiser, result
 
-    def get_continuum_centre(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=False, fig=None, ax=None, clip=False, return_full=False, fit_args={}, plot_collaped_cube_args={}, contour_args={}):
+
+
+    def get_continuum_centre(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=False, fig=None, ax=None, clip=False, return_full=False, fit_args={}, plot_collapsed_cube_args={}, contour_args={}):
 
         """
         Fit a guassian to a collapsed cube and get the x, y coordinates of the centre. 
@@ -759,7 +802,7 @@ class Cube(object):
         
 
 
-        image, errors, minimiser, result=self.fit_gaussian(fit_funct, clip=clip)
+        image, errors, minimiser, result=self.fit_gaussian(fit_funct=fit_funct, clip=clip)
         
       
         ret=[result]
@@ -768,7 +811,7 @@ class Cube(object):
         if plot:
             if fig is None or ax is None:
                 fig, ax=plt.subplots(figsize=(10, 10))
-            fig, ax=self.plot_collaped_cube(fig=fig, ax=ax, **plot_collaped_cube_args)
+            fig, ax=self.plot_collapsed_cube(fig=fig, ax=ax, **plot_collapsed_cube_args)
 
             Y, X = np.indices(self.collapsed.shape)
             best_gaussian=twoD_Gaussian(result.params, X, Y)
@@ -783,9 +826,9 @@ class Cube(object):
 
 
             if verbose:
-                print "\nObject: {}".format(self.object_name)
-                print "Best Fitting Gaussian:"
-                print "\t(x, y)={:.2f}, {:.2f}".format(result.params['X'].value, result.params['Y'].value)
+                print("\nObject: {}".format(self.object_name))
+                print("Best Fitting Gaussian:")
+                print("\t(x, y)={:.2f}, {:.2f}".format(result.params['X'].value, result.params['Y'].value))
                 LM.report_fit(result)
 
 
@@ -800,7 +843,7 @@ class Cube(object):
 
         return ret
 
-    def get_PSF(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=True, fig=None, ax=None, plot_collaped_cube_args={}, contour_args={}):
+    def get_PSF(self, fit_funct=twoD_Gaussian, plot=True, savename=None, verbose=True, fig=None, ax=None, clip=False, plot_collapsed_cube_args={}, contour_args={}):
 
         """ 
         Get the PSF of a cube containing an arm star. Use cube.fit_gaussian to fit a 2D gaussian, then use that to get the average seeing (from get_av_seeing)
@@ -809,36 +852,51 @@ class Cube(object):
         Can plot if necessary and print results. 
         """
 
+        if not self.has_been_collapsed:
+            self.collapse()
 
-        popt, pcov=self.fit_gaussian(fit_funct)
+        image, errors, minimiser, result=self.fit_gaussian(fit_funct=fit_funct, clip=clip)
         Y, X = np.indices(self.collapsed.shape)
-        best_gaussian=twoD_Gaussian((X, Y), *popt)
+        best_gaussian=twoD_Gaussian_with_slope(result.params, X, Y)
 
-
+        average_seeing=self.get_av_seeing(result)
 
         if verbose:
-            print "\nObject: {}".format(self.object_name)
-            print "Best Fitting Gaussian:"
-            print "\t(x, y)={:.2f}, {:.2f}".format(popt[1], popt[2])
-            print "\tsigma_x={:.3f}, sigma_y={:.3f}".format(popt[3], popt[4])
-            print '\ttheta={:.3f}, amplitude={}'.format(popt[5], popt[0])
-            print '\tReconstructed seeing: {:.3f}"'.format(get_av_seeing(popt))
+            print("\nObject: {}".format(self.object_name))
+            print("Best Fitting Gaussian:")
+            print("\t(x, y)={:.2f}, {:.2f}".format(result.params['X'].value, result.params['Y'].value))
+            print("\tsigma_x={:.3f}, sigma_y={:.3f}".format(result.params['XWIDTH'].value, result.params['YWIDTH'].value))
+            print('\ttheta={:.3f}, amplitude={:.3f}'.format(result.params['ROTATION'].value, result.params['Amp'].value))
+            print('\toffset={:.3f}, x_gradient={:.3f}, y_gradient={:.3f}'.format(result.params['OFFSET'].value, result.params['X_GRAD'].value, result.params['Y_GRAD'].value))
+            print('\tReconstructed seeing: {:.3f}"'.format(average_seeing))
 
         if plot:
             if fig is None or ax is None:
                 fig, ax=plt.subplots(figsize=(10, 10))
-            fig, ax=self.plot_collaped_cube(fig=fig, ax=ax, **plot_collaped_cube_args)
+            fig, ax=self.plot_collapsed_cube(fig=fig, ax=ax, **plot_collapsed_cube_args)
 
             levels=np.array([0.2, 0.4, 0.6, 0.8, 0.95])*np.max(best_gaussian)
-            ax.contour(X, Y, best_gaussian.reshape(self.ny, self.nx), levels=levels, linewidth=2.0, colors='w', **contour_args)
+            ax.contour(X, Y, best_gaussian.reshape(self.ny, self.nx), levels=levels, linewidth=2.0, colors='w', origin='lower', **contour_args)
 
-            ax.set_title(r"{}: $\sigma_{{x}}={:.2f}$, $\sigma_{{y}}={:.2f}$".format(ax.get_title(), popt[3], popt[4]))
-
+            ax.set_title(r"{}: Seeing={:.3f}$^{{{{\prime\prime}}}}$, $\sigma_{{x}}={:.2f}$, $\sigma_{{y}}={:.2f}$".format(ax.get_title(), average_seeing, result.params['XWIDTH'].value, result.params['YWIDTH'].value))
+            ax.set_aspect('equal')
             if savename is not None:
                 fig.savefig(savename)
-            return get_av_seeing(popt), popt, (fig, ax)
+            return average_seeing, result, (fig, ax)
 
-        return get_av_seeing(popt), popt 
+        return average_seeing, result 
+
+
+    def get_av_seeing(self, result, pix_scale=None):
+        """
+        Get average seeing in x and y directions from fitting a gaussian to a point source. 
+        Take sqrt(sigma_x**2+sigma_y**2) of the best fitting Gaussian and multiply by the pixel scale.
+        """
+        pix_scale=self.pix_scale
+
+
+
+        return pix_scale*np.sqrt(result.params['XWIDTH'].value**2+result.params['YWIDTH'].value**2)
 
     def interpolate_point_1_arcsec_sampling(self):
         """
@@ -872,24 +930,27 @@ class Cube(object):
             out_noise = noise_interp(flat.T)
             new_noise = out_noise.reshape(*new_points[0].shape)
 
+            """This does terrible things to the spectra!"""
             #Ensure the flux in each wavelength slice is the same
 
-            old_flux=np.nansum(np.nansum(self.data, axis=2), axis=1)
-            new_flux=np.nansum(np.nansum(new_cube, axis=2), axis=1)
+            # old_flux=np.nanmedian(np.nanmedian(self.data, axis=2), axis=1)
+            # new_flux=np.nanmedian(np.nanmedian(new_cube, axis=2), axis=1)
 
-            old_noise_values=np.nansum(np.nansum(self.noise, axis=2), axis=1)
-            new_noise_values=np.nansum(np.nansum(new_noise, axis=2), axis=1)
+            # old_noise_values=np.nanmedian(np.nanmedian(self.noise, axis=2), axis=1)
+            # new_noise_values=np.nanmedian(np.nanmedian(new_noise, axis=2), axis=1)
 
-            flux_ratio=old_flux/new_flux
-            noise_ratio=old_noise_values/new_noise_values
+            # flux_ratio=old_flux/new_flux
+            # noise_ratio=old_noise_values/new_noise_values
 
-            flux_ratio[~np.isfinite(flux_ratio)]=1.0
-            noise_ratio[~np.isfinite(noise_ratio)]=1.0
+            # flux_ratio[~np.isfinite(flux_ratio)]=1.0
+            # noise_ratio[~np.isfinite(noise_ratio)]=1.0
 
 
-            flux_ratio_cube=np.repeat(flux_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
-            noise_ratio_cube=np.repeat(noise_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
+            # flux_ratio_cube=np.repeat(flux_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
+            # noise_ratio_cube=np.repeat(noise_ratio, x_new.shape[0]*y_new.shape[0]).reshape(-1, y_new.shape[0], x_new.shape[0])
 
+            flux_ratio_cube=np.ones_like(new_cube)
+            noise_ratio_cube=np.ones_like(new_noise)
             
 
             self.data=new_cube*flux_ratio_cube
@@ -898,6 +959,8 @@ class Cube(object):
             self.ny=y_new.shape[0]
 
             self.pix_scale=0.1
+
+            
             return new_cube*flux_ratio_cube, new_noise*noise_ratio_cube
 
         else:
@@ -953,7 +1016,7 @@ def get_cutout(cube, main_cutout):
       
     except:
         import pdb; pdb.set_trace()
-        print 'No overlap for {}'.format(cube.object_name)
+        print('No overlap for {}'.format(cube.object_name))
         return None, None
 
     

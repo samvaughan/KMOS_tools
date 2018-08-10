@@ -1,14 +1,15 @@
-from cube_tools import Cube
+from .cube_tools import Cube, twoD_Gaussian_with_slope
 import numpy as np 
 import voronoi_2d_binning as V
 from stellarpops.tools import extractTools as ET
 from astropy.io import fits
 from scipy import ndimage
+import scipy.signal as S
 
 import glob
 
-from ppxf import ppxf
-import ppxf_util as util
+import ppxf.ppxf as PPXF
+import ppxf.ppxf_util as util
 
 
 import scipy.constants as const
@@ -17,29 +18,33 @@ from stellarpops.tools import CD12tools as CT
 
 
 from tqdm import tqdm
-import kin_functions as KF
+from . import kin_functions as KF
 
 import numpy.ma as ma
+import lmfit as LM  
 
-import plotting as P
+from . import plotting as P
 import lmfit_SPV as LMSPV
+import pandas as pd
 
+import os
+import settings
 
 class CubeKinematics(Cube):
 
 
     #A subclass of Cube to deal with the kinematics
 
-    def __init__(self, cube, bins_spectra_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Bins_and_spectra', 
-        fits_file_out_path='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_fits_files/Kinematic_and_Flux_measurements', 
-        text_file_outname='/home/vaughan/Science/KCLASH/Kinematics/Kin_Results_txt_files',
+    def __init__(self, cube, bins_spectra_path=os.path.expanduser('~/Science/KCLASH/Kinematics/Kin_Results_fits_files/Bins_and_spectra'), 
+        fits_file_out_path=os.path.expanduser('~/Science/KCLASH/Kinematics/Kin_Results_fits_files/Kinematic_and_Flux_measurements'), 
+        text_file_out_path=os.path.expanduser('~/Science/KCLASH/Kinematics/Kin_Results_txt_files'),
         **kwargs):
 
         #Initialise the parent class
         super(self.__class__, self).__init__(cube, **kwargs)
         self.bins_spectra_path = bins_spectra_path
         self.fits_file_out_path = fits_file_out_path
-        self.text_file_out_path = text_file_outname
+        self.text_file_out_path = text_file_out_path
 
         #The extra attributes we'll create and fill
         #Question- should I just call functions to make these (or functions to load these) here?
@@ -103,15 +108,12 @@ class CubeKinematics(Cube):
         Returns:
             None
         """
-
-        #Interpolate to 0.1 arcsecond sampling
-        self.interpolate_point_1_arcsec_sampling()
         
 
         d_lam=self.lamdas[1]-self.lamdas[0]
 
         #Mask just around the H-alpha wavelength, to get the signal value
-        signal_mask=self.get_spec_mask_around_wave(0.65628*(1+self.z), 0.001)
+        signal_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.001)
 
         #Not a typo- x and y axes are reversed
         self.y_coords_2d, self.x_coords_2d=np.indices((self.ny, self.nx))
@@ -120,8 +122,8 @@ class CubeKinematics(Cube):
 
 
         galmedian=np.nanmedian(self.data[signal_mask, :, :], axis=0)
-        signal=np.abs(galmedian)*np.nansum(self.data[signal_mask, :, :]/galmedian, axis=0)*d_lam  
-        noise=np.nansum(self.noise[signal_mask, :, :], axis=0)*d_lam    
+        signal=np.abs(galmedian)*np.nansum(self.data[signal_mask, :, :]/galmedian, axis=0)  
+        noise=np.nansum(self.noise[signal_mask, :, :], axis=0)    
 
         #Mask invalid things
         nan_mask=~((np.isfinite(noise))&(noise>0))
@@ -138,12 +140,14 @@ class CubeKinematics(Cube):
 
         self.bin_mask=np.where(self.bins_1d>=0.0)
 
-        self.spectra, self.noise_spectra=ET.simple_extraction(self.y_coords_2d, self.x_coords_2d, self.bins_2d, self.data, self.noise**2, type='median')
+
+
+        self.spectra, self.noise_spectra=ET.simple_extraction(self.x_coords_2d, self.y_coords_2d, self.bins_2d, self.data, self.noise**2, type='median')
         
         outname='{}/{}_bins_spectra.fits'.format(self.bins_spectra_path, self.object_name)
 
         if save:
-            self.save_spectra_to_fits(self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.spectra, self.noise_spectra, self.nPixels, outname)
+            self.save_spectra_to_fits(self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.lamdas, self.spectra, self.noise_spectra, self.nPixels, outname)
 
         
         self.nPixels=nPixels
@@ -158,7 +162,7 @@ class CubeKinematics(Cube):
 
 
     @staticmethod
-    def save_spectra_to_fits(x, y, bins, lamdas, spectra, noise_spectra, outname, nPixels, overwrite=True):
+    def save_spectra_to_fits(x, y, bins, lamdas, spectra, noise_spectra, nPixels, outname, overwrite=True):
         
         """Take spectra extracted from a set of Voronoi bins and save them to a multi extension fits_file
 
@@ -203,9 +207,10 @@ class CubeKinematics(Cube):
 
         hdul=fits.open(filename)
 
-        self.x_coords_1d, self.y_coords_1d, self.bins_1d=hdul[0].data
+        self.x_coords_1d, self.y_coords_1d, self.bins_1d=hdul[0].data.T
         #FIXME- assign lamdas here?
-        self.lamdas=hdul[1].data
+        self.lamdas=self.header['CRVAL3']+(np.arange(self.header['NAXIS3'])-self.header['CRPIX3'])*self.header['CDELT3']
+        #self.lamdas=hdul[1].data
         self.spectra=hdul[2].data
         self.noise_spectra=hdul[3].data
         self.nPixels=hdul[4].data
@@ -222,6 +227,20 @@ class CubeKinematics(Cube):
         self.has_voronoi_bins=True
 
 
+
+    def inspect_spectra(self):
+        """
+        Plot the spectra we've extracted from the voronoi bins
+        """
+        import matplotlib.pyplot as plt 
+        fig, ax=plt.subplots(figsize=(17, 4))
+
+        ax.plot(np.exp(self.ppxf_logLam)/10**4, self.ppxf_log_galaxy.T)
+        ax.plot(np.exp(self.ppxf_logLam)/10**4, self.ppxf_best_fit.T, c='r', alpha=0.8)
+
+        ax.axvline(self.Ha_lam, c='k', linestyle='dashed')
+
+        return ax
 
 
 
@@ -248,7 +267,7 @@ class CubeKinematics(Cube):
             line_wave: An N_templates list of the central wavelength of each emission line 
             lamRange_template: List. A two component list of the start and stop wavelengths of the templates. In Angstroms
         """
-        cvd = glob.glob('/Data/stellarpops/CvD1.2/t*.ssp')
+        cvd = glob.glob(os.path.expanduser('~/z/Data/stellarpops/CvD1.2/t*.ssp'))
         cvd.sort()
 
         #CvD Templates are at resolution 2000, so work out lamda/R for the middle wavelength in your array
@@ -304,15 +323,16 @@ class CubeKinematics(Cube):
         Add a series of arrays to an HDU extension, ready to be saved
         """
         hdu_extensions=[]
+
         for thing, label in zip(things, labels):
-            hdu=fits.ImageHDU(KF.display_binned_quantity(self.xcoords_1d[self.bin_mask], self.ycoords_1d[self.bin_mask], thing[self.bins_1d[self.bin_mask]]))
+            hdu=fits.ImageHDU(thing)
             hdu.header['QUANTITY']=label
             hdu_extensions.append(hdu)
 
         return hdu_extensions
 
 
-    def fit_emission_lines(self, save=True, plot=False):
+    def fit_emission_lines(self, save=True, median_filter=1, **kwargs):
 
         """
         Fit emission lines to the spectra of a K-CLASH observation cube
@@ -341,15 +361,20 @@ class CubeKinematics(Cube):
         self.gas_templates, self.line_names, line_wave, lamRange_template=self.load_gas_templates(lamRange_galaxy, self.velscale, FWHM_gal)
 
         #Empty arrays for results
-        vel_1d=np.empty(nbins)
-        vel_err_1d=np.empty(nbins)
-        sigmas_1d=np.empty(nbins)
-        sigmas_err_1d=np.empty(nbins)
-        weights_1d=np.empty((nbins, self.gas_templates.shape[-1]))
-        chisqs_1d=np.empty(nbins)
-      
+        self.vel_1d=np.empty(nbins)
+        self.vel_err_1d=np.empty(nbins)
+        self.sigmas_1d=np.empty(nbins)
+        self.sigmas_err_1d=np.empty(nbins)
+        self.weights_1d=np.empty((nbins, self.gas_templates.shape[-1]))
+        self.chisqs_1d=np.empty(nbins)
+
+        self.ppxf_best_fit=np.empty_like(self.spectra)
+        self.ppxf_log_galaxy=np.empty_like(self.spectra)
+        self.ppxf_logLam=None
         #Fit each spectrum with pPXF
-        for i, (spectrum, noise_spectrum) in enumerate(tqdm(zip(self.spectra, self.noise_spectra), leave=False)):
+
+        self.medfilt_spectra=S.medfilt(self.spectra, (1, median_filter))
+        for i, (spectrum, noise_spectrum) in enumerate(tqdm(list(zip(self.medfilt_spectra, self.noise_spectra)), leave=False)):
 
 
             #logrebin the galaxy spectrum and noise spectrum
@@ -361,6 +386,8 @@ class CubeKinematics(Cube):
             #If our noise is all 0s, skip this spectrum            
             if not np.any(log_noise>0.0):
                 run_ppxf=False
+
+
 
             if run_ppxf:
                 #Make a mask the correct length...
@@ -383,8 +410,22 @@ class CubeKinematics(Cube):
                 #PPXF starting guess
                 start=[0,3*self.velscale[0]]
 
-                #Call ppxf
-                pp = ppxf.ppxf(self.gas_templates, log_galaxy, log_noise, self.velscale, start, plot=False, moments=2, degree=4, vsyst=dv, clean=True, quiet=True)
+                #Call ppxf and set default arguments
+                kwargs.setdefault('clean', True)
+                kwargs.setdefault('quiet', True)
+                kwargs.setdefault('plot', False)
+                kwargs.setdefault('moments', 2)
+                kwargs.setdefault('degree', 4)
+
+
+                #Mask bits where the galaxy is 0 and clip the edges
+                mask=np.ones_like(log_galaxy, dtype=bool)
+                mask[log_galaxy==0]=False
+                mask[:140]=False
+                mask[1980:]=False
+
+                pp = PPXF.ppxf(self.gas_templates, log_galaxy, log_noise, self.velscale, start, vsyst=dv, mask=mask, **kwargs)
+
                 chi2=pp.chi2
             else:
                 #If we have a bad spectrum, set the chi_squared to be huge and catch it in the bad results below 
@@ -392,45 +433,48 @@ class CubeKinematics(Cube):
 
             #Only save the results if the ChiSquared is good
             if chi2<5:
-                vel_1d[i]=pp.sol[0]
-                vel_err_1d[i]=pp.error[0]*np.sqrt(pp.chi2)
-                sigmas_1d[i]=pp.sol[1]
-                sigmas_err_1d[i]=pp.error[1]*np.sqrt(pp.chi2)
+                self.vel_1d[i]=pp.sol[0]
+                self.vel_err_1d[i]=pp.error[0]*np.sqrt(pp.chi2)
+                self.sigmas_1d[i]=pp.sol[1]
+                self.sigmas_err_1d[i]=pp.error[1]*np.sqrt(pp.chi2)
+                self.chisqs_1d[i]=pp.chi2
+                self.weights_1d[i, :]=pp.weights
 
-                chisqs_1d[i]=pp.chi2
-
-                weights_1d[i, :]=pp.weights
-
+                self.ppxf_best_fit[i, :]=pp.bestfit
+                self.ppxf_log_galaxy[i, :]=log_galaxy
+                self.ppxf_logLam=logLam_galaxy
                 # if plot:
                 #     line, =ax.plot(lamdas, spectrum)
                 #     ax.plot(lamdas, pp.bestfit, c=line.get_color(), linewidth=2.0)
 
             else:
-                print("Bin {} returns a bad result".format(i))
+                print(("Bin {} returns a bad result".format(i)))
 
-                vel_1d[i]=np.nan
-                vel_err_1d[i]=np.nan
-                sigmas_1d[i]=np.nan
-                sigmas_err_1d[i]=np.nan
+                self.vel_1d[i]=np.nan
+                self.vel_err_1d[i]=np.nan
+                self.sigmas_1d[i]=np.nan
+                self.sigmas_err_1d[i]=np.nan
 
-                chisqs_1d[i]=pp.chi2
+                self.chisqs_1d[i]=pp.chi2
 
-                weights_1d[i, :]=[np.nan]*len(pp.weights)
+                self.weights_1d[i, :]=[np.nan]*len(pp.weights)
 
-
+                self.ppxf_best_fit[i, :]=np.zeros_like(log_galaxy)
+                self.ppxf_log_galaxy[i, :]=log_galaxy
+                self.ppxf_logLam=logLam_galaxy
                 # if plot:
                 #     line, =ax.plot(self.lamdas, spectrum, linestyle='dotted')
                 #     ax.plot(self.lamdas, pp.bestfit, c=line.get_color(), linewidth=2.0,  linestyle='dotted')
 
 
-
+        for thing, name in zip([self.vel_1d, self.vel_err_1d, self.sigmas_1d, self.sigmas_err_1d, self.weights_1d[:, 0], self.weights_1d[:, -1]], ['vel_2d', 'vel_err_2d', 'sigmas_2d', 'sigmas_err_2d', 'halpha_2d', 'n2_2d']):
+            self.expand_to_2d_map(thing, name)
         #Save the results to a text file and a multi extension fits file
         if save:
-            self.save_ppxf_results_to_text_file(self.text_file_outname)
+            self.save_ppxf_results_to_text_file(self.text_file_out_path)
             self.save_ppxf_results_to_MEF(self.fits_file_out_path)
 
-        for thing, name in zip([vel_1d, vel_err_1d, sigmas_1d, sigmas_err_1d, weights_1d[:, 0], weights_1d[:, -1]], ['vel_2d', 'vel_err_2d', 'sigmas_2d', 'sigmas_err_2d', 'halpha_2d', 'n2_2d']):
-            self.expand_to_2d_map(thing, name)
+
 
 
         self.emission_lines_been_fit=True
@@ -453,8 +497,8 @@ class CubeKinematics(Cube):
     
         results_filename='{}/{}_results.txt'.format(out_file_path, self.object_name)
         #Saving things to our text file
-        with open(results_filename, "w") as f:             
-            np.savetxt(f, np.column_stack((self.vel, self.vel_err, self.sigmas, self.sigmas_err, self.weights, self.chisqs)))#, delimiter='\t', newline='\t')
+        #with open(results_filename, "w") as f:             
+        np.savetxt(results_filename, np.column_stack((self.vel_1d, self.vel_err_1d, self.sigmas_1d, self.sigmas_err_1d, self.weights_1d, self.chisqs_1d)))#, delimiter='\t', newline='\t')
 
 
 
@@ -471,26 +515,28 @@ class CubeKinematics(Cube):
         #Empty primary HDU
         #Just to have a header containing all the info
         hdu_primary=fits.PrimaryHDU()
-        for i, label in enumerate(['VoronoiBins'] + kinematic_quantities + self.line_names.tolist()):
+        for i, label in enumerate(['VoronoiBins'] + kinematic_quantities + ['Halpha', 'N2']):
             hdu_primary.header['EXT{}'.format(i+1)]=label
         hdu_extensions.append(hdu_primary)
 
         #Extenstion with the voronoi bins
-        hdu_bins=fits.ImageHDU(KF.display_binned_quantity(self.x_coords_1d[self.bin_mask], self.y_coords_1d[self.bin_mask], self.bins[self.bin_mask]))
+        hdu_bins=fits.ImageHDU(KF.display_binned_quantity(self.x_coords_1d[self.bin_mask], self.y_coords_1d[self.bin_mask], self.bins_1d[self.bin_mask]))
         hdu_bins.header['QUANTITY']='VoronoiBins'
         hdu_extensions.append(hdu_bins)
 
         #Kinematic Quantities
-        hdu_extensions.extend(self.make_MEF_of_quantities([self.vel, self.vel_err, self.sigmas, self.sigmas_err, self.chisqs], kinematic_quantities))
+        hdu_extensions.extend(self.make_MEF_of_quantities([self.vel_2d, self.vel_err_2d, self.sigmas_2d, self.sigmas_err_2d, self.chisqs], kinematic_quantities))
 
         #Weights of templates
-        hdu_extensions.extend(self.make_MEF_of_quantities(self.weights.T, self.line_names))
+        em_line_extensions=self.make_MEF_of_quantities([self.halpha_2d, self.n2_2d], ['Halpha', 'N2'])
+        hdu_extensions.extend(em_line_extensions)
+
 
         #save
         final_fits_file = fits.HDUList(hdu_extensions)
         final_fits_file.writeto('{}/{}_kin_flux.fits'.format(out_file_path, self.object_name), overwrite=True)
 
-        
+
 
     def load_emission_line_attributes(self, filename):
         """Load values of fits to emission line from a fits file and assign them to class attributes
@@ -514,8 +560,8 @@ class CubeKinematics(Cube):
         self.vel_err_2d=hdu_list[3].data
         self.sigmas_2d=hdu_list[4].data
         self.sigmas_err_2d=hdu_list[5].data
-        self.halpha_2d=hdu_list[5].data
-        self.n2_2d=None
+        self.halpha_2d=hdu_list[7].data
+        self.n2_2d=hdu_list[8].data
         self.chisqs=None
         self.gas_templates=None
         self.line_names=None
@@ -540,13 +586,43 @@ class CubeKinematics(Cube):
 
 
 
+    def plot_chains(self, plot_starting_vals=False):
+
+        fig, axs=plt.subplots(nrows=2, ncols=3)
+        labels=self.fit_result.flatchain.columns
+        ch=self.fit_result.chain
+        for i, (ax, label) in enumerate(zip(axs.flatten(), labels)):
+            ax.plot(ch[:, :, i].T, c='k', alpha=0.2)
+            ax.set_title(label)
+            if plot_starting_vals:
+                for p in self.p0[:, i]:
+                    ax.axhline(p, c='r', linestyle='dashed')
+
+    def trim_outlier_walkers(self, chain):
+
+        
+        means=np.mean(np.mean(chain, axis=1), axis=0)
+        stds=np.std(chain.reshape(-1, chain.shape[-1]), axis=0)
+
+        mean_per_walker=np.mean(chain, axis=1)
+
+        distances_from_mean=np.sqrt(np.sum((mean_per_walker-means)**2/stds**2, axis=1))
+
+        #get rid out outliers
+        good_walkers=np.where(distances_from_mean<5)
+
+        return self.fit_result.chain[good_walkers[0], :, :]
     #Fit the kinematic map
 
-    def fit_map(self):
+    def fit_map(self, save=True):
 
 
-        start_r0=self.table['r50_int_z']/self.table['pixscale']
 
+        print('\n\tAbout to fit kinematic map of {}- save = {}\n'.format(self.object_name, save))
+
+
+        start_r0=np.log10(self.table['r50_int_z']/self.table['pixscale'])
+        start_theta=self.table['inc_deg']
         #hdu=fits.open('{}/{}_kin_flux.fits'.format(fits_file_out_path, self.object_name))
         #spectra_noise_hdu=fits.open('{}/{}_bins_spectra.fits'.format(bins_spectra_path, self.object_name))
 
@@ -557,39 +633,64 @@ class CubeKinematics(Cube):
         # vel_data=hdu[2].data
         # vel_errs=hdu[3].data
 
-        bad_bins=np.where(self.nPixels>15.0)
-        # #Get indices which correspond to the bad bins
-        mask=np.isin(self.bins_2d, bad_bins)
+        # bad_bins=np.where(self.nPixels>30.0)
+        # # #Get indices which correspond to the bad bins
+        # mask=np.isin(self.bins_2d, bad_bins)
 
-        self.mask_2D_map('vel_2d', mask)
-        self.mask_2D_map('vel_err_2d', mask)
+        # self.mask_2D_map('vel_2d', mask)
+        # self.mask_2D_map('vel_err_2d', mask)
   
-        #Get to a velocity around 0
-        self.vel_2d-=np.nanmedian(self.vel_2d)
 
-        #import pdb; pdb.set_trace()
-        self.vel_err_2d[self.vel_err_2d>50.0]=np.nan
+        #Get rid of velocities which large errros
+        #self.vel_err_2d[np.abs(self.vel_err_2d)>50.0]=np.nan
 
         self.kinfit_data=ma.masked_invalid(self.vel_2d)
-        self.kinfit_noise=ma.array(self.vel_err_2d, mask=self.kinfit_data.mask)
-        
-        mean_x=np.mean(self.x_coords_1d[self.bin_mask])
-        mean_y=np.mean(self.y_coords_1d[self.bin_mask])
+        self.kinfit_noise=ma.masked_invalid(self.vel_err_2d)
+
+        #Mask anything which is bad in either the data or noise mask
+        data_mask=self.kinfit_data.mask.copy()
+        noise_mask=self.kinfit_noise.mask.copy()
+
+        light=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d)
+        light_mask=light<settings.fraction_of_peak*np.max(light)
+
+
+        combined_mask=data_mask|noise_mask|light_mask
+
+        self.kinfit_data.mask=combined_mask
+        self.kinfit_noise.mask=combined_mask
+
+        #Get to a velocity around 0
+        start_V0=ma.median(self.kinfit_data)
+        self.kinfit_data-=start_V0
+
+
+
+        #Oversample the arrays        
+        print("oversampling by a factor of {}".format(settings.oversample))
+        seeing_pixels=settings.seeing/self.pix_scale
+        #Oversampled X and Y arrays
+        Y, X=np.meshgrid(np.linspace(0.0, self.kinfit_data.shape[0], settings.oversample*self.kinfit_data.shape[0]), np.linspace(0.0, self.kinfit_data.shape[1], settings.oversample*self.kinfit_data.shape[1]))
+        #Mask around H alpha and collapse the cube again
+        Ha_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.01)
+        im=self.collapse(wavelength_mask=Ha_mask)
+        self.light_image=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=settings.seeing, X=self.x_coords_2d, Y=self.y_coords_2d)
+        #self.light_image=None
+
+        #get the centre of the continuum image
+        result=self.get_continuum_centre(plot=False)
+        xc, yc=result.params['X'].value, result.params['Y'].value
 
         fit_params=LMSPV.Parameters()
         #Theta controls how elliptical the contours are
         #it's arccos(short axis / long axis)
-        fit_params.add('theta', value=17.0, min=1, max=np.arccos(1/5.)*180.0/np.pi, vary=True)
-        fit_params.add('xc', value=mean_x, min=mean_x-5, max=mean_x+5, vary=True)
-        fit_params.add('yc', value=mean_y, min=mean_y-5, max=mean_y+5, vary=True)
-        fit_params.add('r0', value=start_r0, min=1.0, max=100.0, vary=True)
-        fit_params.add('log_s0', value=5, min=3.0, max=8.0, vary=True)
-        fit_params.add('v0', value=np.nanmedian(self.kinfit_data), min=-300.0, max=300.0)
+        fit_params.add('theta', value=start_theta, min=1, max=np.arccos(1/5.)*180.0/np.pi, vary=False)
+        fit_params.add('xc', value=xc, min=xc-settings.max_centre_shift, max=xc+settings.max_centre_shift, vary=True)
+        fit_params.add('yc', value=yc, min=yc-settings.max_centre_shift, max=yc+settings.max_centre_shift, vary=True)
+        fit_params.add('log_r0', value=start_r0, min=0.0, max=2.0, vary=True)
+        fit_params.add('log_s0', value=10, min=5.0, max=20.0, vary=True)
+        fit_params.add('v0', value=0.0, min=-300.0, max=300.0)
         fit_params.add('PA', value=0.0, min=-180.0, max=180.0, vary=True)
-
-
-        # a=1.0
-        # s=3.0
 
         #Select the parameters we're varying, ignore the fixed ones
         #variables=[thing for thing in fit_params if fit_params[thing].vary]
@@ -597,53 +698,27 @@ class CubeKinematics(Cube):
         #Vice versa, plus add in the fixed value
         #fixed=[ "{}={},".format(thing, fit_params[thing].value) for thing in fit_params if not fit_params[thing].vary]
 
+        nwalkers=100
+        nsteps=5000
+        nburn=1000
 
-        
-
-        minimiser = LMSPV.Minimizer(KF.objective_function, fit_params, fcn_args=(self.kinfit_data, self.kinfit_noise, self.x_coords_1d, self.y_coords_1d, self.bins_1d))
-        quick_result = minimiser.minimize(method='differential_evolution')
-
-        self.quick_result=quick_result
+        start_vals=np.array([fit_params[thing].value for thing in fit_params if fit_params[thing].vary])
+        p0=np.array([start_vals+ 1e-1*np.random.randn(len(start_vals)) for i in range(nwalkers)])
+        self.p0=p0
 
 
-        self.kinfit_data=ma.masked_invalid(self.vel_2d)
-        self.kinfit_noise=ma.array(self.vel_err_2d, mask=self.kinfit_data.mask)
 
-        nwalkers=50
-        nsteps=1000
 
-        start_vals=np.array([quick_result.params[thing].value for thing in quick_result.params if quick_result.params[thing].vary])
-        p0=np.array([start_vals+ 1e-2*np.random.randn(len(start_vals)) for i in range(nwalkers)])
-
-        minimiser = LMSPV.Minimizer(KF.lnprob, fit_params, fcn_args=(self.kinfit_data, self.kinfit_noise, self.x_coords_1d, self.y_coords_1d, self.bins_1d))
+        minimiser = LMSPV.Minimizer(KF.lnprob, fit_params, 
+            fcn_args=(self.kinfit_data, self.kinfit_noise, self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.light_image, seeing_pixels, settings.oversample)
+            #fcn_kwargs={'light_image':self.light_image, 'seeing_pixels':seeing_pixels, 'oversample':self.oversample}
+            )
         print('Running emcee')
-        fit_result = minimiser.emcee(steps=nsteps, nwalkers=nwalkers, params=fit_params, pos=p0, emcee_sample_kwargs={'progress':True})
+        sampler_kwargs={'progress':True}
+       
+        fit_result = minimiser.emcee(steps=nsteps, nwalkers=nwalkers, burn=nburn, params=fit_params, pos=p0, emcee_sample_kwargs=sampler_kwargs)
 
-        # fit_params.add('ln_a', value=1.0, min=-2, max=5, vary=True)
-        # fit_params.add('ln_s', value=1.0, min=-2.0, max=5.0, vary=True)
-
-        # start_vals=np.append(start_vals, [1.0, 1.0])
-        # p0=np.array([start_vals+ 1e-2*np.random.randn(len(start_vals)) for i in range(nwalkers)])
-        
-        # # start_vals=np.array([fit_params[thing].value for thing in fit_params if fit_params[thing].vary])
-        # # p0=np.array([start_vals+ np.random.randn(len(start_vals)) for i in range(nwalkers)])
-
-
-        # minimiser = LMSPV.Minimizer(KHF.lnlike_covariance, fit_params, fcn_args=(data, noise, x, y, bins))
-        # # #minimiser = LMSPV.Minimizer(KHF.lnprob, fit_params, fcn_args=(data, noise, x, y, bins))
-        # print('Running emcee')
-        # covar_result = minimiser.emcee(steps=nsteps, nwalkers=nwalkers, params=fit_params, pos=p0, emcee_sample_kwargs={'progress':True})
-
-
-        #if best_result is not None:
-        #result = minimiser.emcee(steps=2000, nwalkers=50)
-        #LMSPV.report_fit(result)
-        #chisq = result.chisqr/(result.ndata-result.nvarys)
-
-
-        
-
-        best_model=KF.velfield(fit_result.params, self.kinfit_data)
+        best_model=KF.velfield(fit_result.params, self.kinfit_data, settings.oversample)
         max_v=np.max(best_model-np.nanmedian(best_model))
         min_v=np.min(best_model-np.nanmedian(best_model))
         max_v_err=0.0
@@ -654,27 +729,169 @@ class CubeKinematics(Cube):
 
         self.fit_result=fit_result
 
-        #fig.savefig('/home/vaughan/Science/KCLASH/Kinematics/KinMapFits/{}_fit.pdf'.format(GalName), bbox_inches='tight')
+        self.chain=self.trim_outlier_walkers(self.fit_result.chain)
+        self.flatchain=pd.DataFrame(self.chain.reshape(-1, self.chain.shape[-1]), columns=self.fit_result.flatchain.columns)
 
-        # #Ignore errors here
-        # with open(results_filename, 'a') as f:
-        #     f.write('{}\t{}\t{}\t{}\n'.format(GalName, self.table['M*'][0], max_v, chisq))
+
+        self.bestfit_model=KF.make_binned_model(self.fit_result.params, self.kinfit_data, self.x_coords_1d, self.y_coords_1d, self.bins_1d, self.light_image, seeing_pixels, settings.oversample)
+        self.bestfit_model[self.kinfit_data.mask]=np.nan
+
+
+        if save:
+            print("Saving {} results".format(self.object_name))
+            self.save_kinematic_fit_to_MEF(self.fits_file_out_path)
+
+
         return fit_result, (max_v, max_v_err, min_v, min_v_err)
 
-    def plot_kinematic_fit(self):
 
+
+    def save_kinematic_fit_to_MEF(self, out_file_path):
+
+        """Save the results from the kinematic fitting to a multi extension fits file"""
+
+        #The list which we'll fill with fits extensions
+        hdu_extensions=[]
+
+        #Kinematic quatities we're saving
+        kinematic_quantities=['Velocity', 'VelocityError', 'Model']
+
+        #Empty primary HDU
+        #Just to have a header containing all the info
+        hdu_primary=fits.PrimaryHDU()
+        for i, label in enumerate(kinematic_quantities):
+            hdu_primary.header['EXT{}'.format(i+1)]=label
+        hdu_extensions.append(hdu_primary)
+
+        #Extenstion with the voronoi bins
+        for data, name in zip([self.kinfit_data, self.kinfit_noise, self.bestfit_model], kinematic_quantities):
+            try:
+                hdu=fits.ImageHDU(data.filled(fill_value=np.nan))
+            except:
+                hdu=fits.ImageHDU(data)
+            hdu.header['QUANTITY']=name
+            hdu_extensions.append(hdu)
+
+        #save
+        final_fits_file = fits.HDUList(hdu_extensions)
+        final_fits_file.writeto('{}/{}_kin_fit.fits'.format(out_file_path, self.object_name), overwrite=True)
+
+
+    def plot_kinematic_fit(self, params=None):
+
+        if params is None:
+            params=self.fit_result.params
         r_e=self.table['r50_int_z']
 
-        stds=KF.get_errors_on_fit(self.fit_result.params, self.kinfit_data, self.kinfit_data, self.fit_result.flatchain.values, self.x_coords_1d, self.y_coords_1d, self.bins_1d)
-        self.fit_errors=stds
-        (fig, ax)=P.plot_model(self.fit_result.params, self.kinfit_data, self.kinfit_data, self.x_coords_1d, self.y_coords_1d, self.bins_1d, r_e, stds)
+        seeing_pixels=settings.seeing/self.pix_scale
+
+        #stds=KF.get_errors_on_fit(params, self.kinfit_data, self.kinfit_noise, self.fit_result.flatchain.values, self.x_coords_1d, self.y_coords_1d, self.bins_1d)
+        gaussian_fit_to_light, fit_to_light_result=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d, return_full=True)
+        #self.fit_errors=stds
+        (fig, ax)=P.plot_model(params, self.kinfit_data, self.kinfit_noise, self.bestfit_model, self.x_coords_1d, self.y_coords_1d, self.bins_1d, r_e, self.light_image, seeing_pixels, self.collapsed.copy(), gaussian_fit_to_light, self.object_name, fit_to_light_result)#, stds)
 
 
         return fig, ax
 
 
+    def plot_kinematic_maps(self, mask=None):
+
+        fig, ax=P.display_kinematics(self, self.vel_2d, self.sigmas_2d, self.halpha_2d, self.n2_2d, self.bins_2d, self.nPixels, mask=mask)
 
 
+        return fig, ax
+
+
+        # r_e=cube_kins.table['r50_int_z']
+
+        # stds=KF.get_errors_on_fit(cube_kins.fit_result.params, cube_kins.kinfit_data, cube_kins.kinfit_data, cube_kins.fit_result.flatchain.values, cube_kins.x_coords_1d, cube_kins.y_coords_1d, cube_kins.bins_1d)
+        # cube_kins.fit_errors=stds
+        # (fig, ax)=P.plot_model(cube_kins.fit_result.params, cube_kins.kinfit_data, cube_kins.kinfit_data, cube_kins.x_coords_1d, cube_kins.y_coords_1d, cube_kins.bins_1d, r_e, stds)
+
+
+    def get_bestfit_lightprofile(self, X, Y,oversample, seeing=None, return_full=False, **kwargs):
+
+        """Fit a 2D gaussian with a slope and offset to a collapsed image of the cube. Then _remove_ the slope and offset
+        to be left with the shape of the light profile (normalised)
+        """
+        
+        Ha_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.01)
+        im=self.collapse(wavelength_mask=Ha_mask)
+
+        image, errors, minimiser, result=self.fit_gaussian(im=im, **kwargs)
+
+        result.params['X_GRAD'].set(0.0)
+        result.params['Y_GRAD'].set(0.0)
+        result.params['OFFSET'].set(0.0)
+
+        if seeing is not None:
+            #print "'Removing' seeing of {} arcseconds in quadrature".format(seeing)
+            seeing_pixels=seeing/self.pix_scale/np.sqrt(8*np.log(2))
+            #print "This is {} pixels".format(seeing_pixels)
+
+            xsig=result.params['XWIDTH'].value
+            ysig=result.params['YWIDTH'].value
+
+            result.params['XWIDTH'].set(np.sqrt((xsig**2-seeing_pixels**2).clip(0.2)))
+            result.params['YWIDTH'].set(np.sqrt((ysig**2-seeing_pixels**2).clip(0.2)))
+
+
+
+        new_x=np.linspace(X.min(), X.max(), X.shape[0]*oversample)
+        new_y=np.linspace(Y.min(), Y.max(), Y.shape[1]*oversample)
+
+        x, y=np.meshgrid(new_x, new_y)
+
+        best_gaussian=twoD_Gaussian_with_slope(result.params, x, y)
+        #norm=np.trapz(np.trapz(best_gaussian, X[:, 0], axis=1), Y[0, :])
+        #norm=np.trapz(np.trapz(best_gaussian, Y[0, :], axis=1), X[:, 0])
+
+        
+
+        if return_full:
+            ret=best_gaussian/np.max(best_gaussian), result
+        else:
+            ret=best_gaussian/np.max(best_gaussian)
+
+        return ret
+
+    # def get_seeing_disk(self, seeing, X, Y, oversample=1):
+    #     #Get the seeing Gaussian and the image of the galaxy light
+            
+    #     #Seeing is the FWHM of the Gaussian
+    #     #So convert this into sigma pixels
+    #     seeing_sigma=seeing/self.pix_scale/np.sqrt(8*np.log(2))
+    #     #Seeing Gaussian
+
+    #     seeing_xc=self.kinfit_data.shape[1]/2.0
+    #     seeing_yc=self.kinfit_data.shape[0]/2.0
+    #     seeing_params=LMSPV.Parameters()
+    #     seeing_params.add('Amp', value=1.0)
+    #     seeing_params.add('X', value=seeing_xc)
+    #     seeing_params.add('Y', value=seeing_yc)
+    #     seeing_params.add('XWIDTH', value=seeing_sigma)
+    #     seeing_params.add('YWIDTH', value=seeing_sigma)
+    #     seeing_params.add('ROTATION', value=0.0)
+    #     seeing_params.add('OFFSET', value=0.0)
+    #     seeing_params.add('X_GRAD', value=0.0) 
+    #     seeing_params.add('Y_GRAD', value=0.0) 
+
+
+        
+        
+    #     fullsize_seeing_gaussian=twoD_Gaussian_with_slope(seeing_params, Y, X)
+    #     #Trim off things 5 sigma away from the centre to make the convolution faster
+    #     ylow=int(seeing_yc*oversample-3*oversample*seeing_sigma)
+    #     yhigh=int(seeing_yc*oversample+3*oversample*seeing_sigma)
+    #     xlow=int(seeing_xc*oversample-3*oversample*seeing_sigma)
+    #     xhigh=int(seeing_xc*oversample+3*oversample*seeing_sigma)
+    #     seeing_gaussian=fullsize_seeing_gaussian[ylow:yhigh, xlow:xhigh]
+
+
+    #     norm=np.trapz(np.trapz(seeing_gaussian, X[xlow:xhigh, 0], axis=1), Y[0, ylow:yhigh])
+        
+
+    #     return seeing_gaussian/norm
 
 
 
