@@ -110,7 +110,7 @@ def moments(data):
 class Cube(object):
 
 
-    def __init__(self, cube_filename, extension=1, object_name=None, noise_cube=None):
+    def __init__(self, cube_filename, extension=1, object_name=None, noise_cube=None, is_sim=False):
 
         """
         A Cube class for working with (primarily) KMOS cubes.
@@ -119,6 +119,7 @@ class Cube(object):
             extension. Int. Which extension is the cube data in? Default is 1, since all KMOS cubes have their data in the 1 extension (not the first, 0th extension).
             object_name. String. Name of the object in the cube, used for plotting. Default is None, in which case we try and get it from the header.
             noise_cube. 3D numpy array. Array containing the noise cube. If None, assume we're dealing with a KMOS cube and use the cube in the (extension+1)th hdu extension
+            is_sim. Bool. Is the cube a simulated cube rather than a real observation? If so, don't try and look up things which aren't in the data tables
         Notes:
 
             Assumes the noise cube is a separate extension of 
@@ -130,8 +131,9 @@ class Cube(object):
         self.header=self.hdu[extension].header
 
         #WCS information
-        self.wcs=WCS(self.header)
-        self.wcs2d=self.wcs.celestial
+        if not is_sim:
+            self.wcs=WCS(self.header)
+            self.wcs2d=self.wcs.celestial
 
         #Noise Cube
         if noise_cube is None:
@@ -149,27 +151,34 @@ class Cube(object):
         except:
             self.flux_unit='Counts'
 
-        if object_name is None:
-            self.object_name=self.pri_header['HIERARCH ESO PRO REFLEX SUFFIX']
+        if not is_sim:
+            if object_name is None:
+                self.object_name=self.pri_header['HIERARCH ESO PRO REFLEX SUFFIX']
 
 
+        if is_sim:
+            self.Ha_flag=True
+            self.continuum_flag=True
+            self.z=self.header['specz']
+            self.Ha_lam=(1+self.z)*0.656281
 
-        if not 'ARMSTAR' in self.object_name.upper():
+
+        elif not 'ARMSTAR' in self.object_name.upper():
            
             data=self.get_KMOS_fits_data(self.object_name)
             if data is not None:
-                self.Ha_flag=bool(data['Detected Emission?'])
-                self.continuum_flag=bool(data['Detected Continuum?'])
-                self.Ha_lam=float(data['Lamda_Ha'])
-                self.other_lines_flag=bool(data['Other lines?'])
-                self.cluster=data['Cluster_2']
-                self.quadrant=data['Quadrant']
-                self.skysub_method=data['SkySub']
-                self.cubecomments=data['Comment']
+                self.Ha_flag=bool(data['line_detection'])
+                self.continuum_flag=bool(data['detected'])
+                
+                self.cluster=data['cluster']
+                #self.quadrant=data['Quadrant']
+                #self.skysub_method=data['SkySub']
+                #self.cubecomments=data['Comment']
 
                 self.table=data
                 if self.Ha_flag:
-                    self.z=(self.Ha_lam/0.65628)-1.0
+                    self.z=float(data['specz'])
+                    self.Ha_lam=(1+self.z)*0.65628
                 else:
                     warnings.warn("No emission found to get an accurate z. Setting z=0.0")
                     self.z=0.0
@@ -249,18 +258,18 @@ class Cube(object):
 
 
 
-    @staticmethod
-    def get_KMOS_csv_data(object_name):
+    # @staticmethod
+    # def get_KMOS_csv_data(object_name):
 
-        data=np.genfromtxt(os.path.expanduser('~/z/Data/KCLASH/KCLASH_cube_data.csv'), delimiter=',', dtype=str, skip_header=1, autostrip=True)
+    #     data=np.genfromtxt(os.path.expanduser('~/z/Data/KCLASH/KCLASH_cube_data.csv'), delimiter=',', dtype=str, skip_header=1, autostrip=True)
         
         
-        galaxies=list(data[:, 0])
+    #     galaxies=list(data[:, 0])
 
 
         
-        obj_index=galaxies.index(object_name)
-        return data[obj_index, :]
+    #     obj_index=galaxies.index(object_name)
+    #     return data[obj_index, :]
 
 
 
@@ -270,13 +279,15 @@ class Cube(object):
         from astropy.table import Table
         import pandas as pd
 
-        dat=Table.read(os.path.expanduser('~/z/Data/KCLASH/KCLASH_all_parameters.fits'), format='fits')
+        dat=Table.read(os.path.expanduser('~/z/Data/KCLASH/KCLASH_data_V4.4_GalacticRedenning.fits'), format='fits')
         df=dat.to_pandas()
 
         if isinstance(df.name.iloc[0], bytes):
             names=df['name'].str.decode("utf-8")
+            names=names.str.strip()
         elif isinstance(df.name.iloc[0], str):
             names=df.name.values
+            names=names.str.strip().iloc[0]
         else:
             raise TypeError('What type is names? Neither bytes nor string!')
 
@@ -296,7 +307,7 @@ class Cube(object):
         #     return None
 
     @staticmethod    
-    def get_all_KMOS_fits_data(fname=os.path.expanduser('~/z/Data/KCLASH/KCLASH_all_parameters.fits')):
+    def get_all_KMOS_fits_data(fname=os.path.expanduser('~/z/Data/KCLASH/KCLASH_data_V4.4_GalacticRedenning.fits')):
 
         from astropy.table import Table
         import pandas as pd
@@ -703,7 +714,7 @@ class Cube(object):
 
 
 
-    def fit_gaussian(self, fit_funct=twoD_Gaussian, im=None,  method='leastsq', clip=False):
+    def fit_gaussian(self, fit_funct=twoD_Gaussian, im=None, method='leastsq', clip=False):
 
         """
         Fit a Gaussian to a 2D collapsed cube using lmfit

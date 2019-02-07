@@ -10,7 +10,7 @@ import os
 from . import kin_functions as KF
 from scipy import ndimage as ndi
 
-import settings
+from . import settings
 
 class CubePlot(Cube):
 
@@ -461,7 +461,7 @@ def plot_model(params, data, errors, model, X, Y, bins, r_e, light_image, seeing
     axs[0].imshow(collapsed_cube, cmap=cmap, vmin=np.nanpercentile(collapsed_cube, 10), vmax=np.nanpercentile(collapsed_cube, 90), origin='lower')
     #These values come from trial and error- np.sum(light[light>x*peak])/np.sum(light)=0.5, 0.8. 0.505 and 0.2202 work for x
     axs[0].contour(gaussian_fit, colors='k', linestyles=['dashed', 'dashed', 'solid'], levels=[settings.fraction_of_peak*np.max(gaussian_fit), 0.2202*np.max(gaussian_fit), 0.505*np.max(gaussian_fit)])
-
+    #import ipdb; ipdb.set_trace()
 
     #Add centre of Ha flux
     
@@ -518,4 +518,4 @@ def plot_model(params, data, errors, model, X, Y, bins, r_e, light_image, seeing
     fig.subplots_adjust(hspace=0.2, wspace=0.16)
 
 
-    return (fig, axs), np.nanmax(rotated_smooth_model)
+    return (fig, axs), (d, v_obs)

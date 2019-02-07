@@ -28,7 +28,7 @@ import lmfit_SPV as LMSPV
 import pandas as pd
 
 import os
-import settings
+from . import settings
 
 class CubeKinematics(Cube):
 
@@ -86,7 +86,7 @@ class CubeKinematics(Cube):
 
 
 
-    def voronoi_bin_cube(self, SN_TARGET, save=True):
+    def voronoi_bin_cube(self, SN_TARGET, extract_type='sum', save=True):
 
         """
         Take a KCLASH cube, and run Michele's voronoi binning code to bin it to a minimum signal to noise. Then extract the spectra and noise spectra
@@ -113,7 +113,7 @@ class CubeKinematics(Cube):
         d_lam=self.lamdas[1]-self.lamdas[0]
 
         #Mask just around the H-alpha wavelength, to get the signal value
-        signal_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.001)
+        self.signal_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.001)
 
         #Not a typo- x and y axes are reversed
         self.y_coords_2d, self.x_coords_2d=np.indices((self.ny, self.nx))
@@ -121,9 +121,10 @@ class CubeKinematics(Cube):
         self.y_coords_1d=self.y_coords_2d.ravel()
 
 
-        galmedian=np.nanmedian(self.data[signal_mask, :, :], axis=0)
-        signal=np.abs(galmedian)*np.nansum(self.data[signal_mask, :, :]/galmedian, axis=0)  
-        noise=np.nansum(self.noise[signal_mask, :, :], axis=0)    
+        galmedian=np.nanmedian(self.data[self.signal_mask, :, :], axis=0)
+        signal=np.abs(galmedian)*np.nansum(self.data[self.signal_mask, :, :]/galmedian, axis=0)  
+        #noise=np.nansum(self.noise[signal_mask, :, :], axis=0)
+        noise=np.sqrt(np.nansum(self.noise[self.signal_mask, :, :]**2, axis=0))
 
         #Mask invalid things
         nan_mask=~((np.isfinite(noise))&(noise>0))
@@ -142,7 +143,7 @@ class CubeKinematics(Cube):
 
 
 
-        self.spectra, self.noise_spectra=ET.simple_extraction(self.x_coords_2d, self.y_coords_2d, self.bins_2d, self.data, self.noise**2, type='median')
+        self.spectra, self.noise_spectra=ET.simple_extraction(self.x_coords_2d, self.y_coords_2d, self.bins_2d, self.data, self.noise**2, type=extract_type)
         
         outname='{}/{}_bins_spectra.fits'.format(self.bins_spectra_path, self.object_name)
 
@@ -621,8 +622,8 @@ class CubeKinematics(Cube):
         print('\n\tAbout to fit kinematic map of {}- save = {}\n'.format(self.object_name, save))
 
 
-        start_r0=np.log10(self.table['r50_int_z']/self.table['pixscale'])
-        start_theta=self.table['inc_deg']
+        start_r0=np.log10(self.table['r50_disk']/self.pix_scale)
+        start_theta=self.table['inc_disk']
         #hdu=fits.open('{}/{}_kin_flux.fits'.format(fits_file_out_path, self.object_name))
         #spectra_noise_hdu=fits.open('{}/{}_bins_spectra.fits'.format(bins_spectra_path, self.object_name))
 
@@ -651,11 +652,16 @@ class CubeKinematics(Cube):
         data_mask=self.kinfit_data.mask.copy()
         noise_mask=self.kinfit_noise.mask.copy()
 
-        light=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d)
-        light_mask=light<settings.fraction_of_peak*np.max(light)
+        light=self.get_bestfit_lightprofile(oversample=1, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d)
+
+        d=self.data[self.signal_mask, :, :]
+        n=self.noise[self.signal_mask, :, :]
+        sn=np.sum(d, axis=0)/np.sqrt(np.sum(n**2, axis=0))
+
+        #light_mask=sn
 
 
-        combined_mask=data_mask|noise_mask|light_mask
+        combined_mask=data_mask|noise_mask#|light_mask
 
         self.kinfit_data.mask=combined_mask
         self.kinfit_noise.mask=combined_mask
@@ -674,7 +680,7 @@ class CubeKinematics(Cube):
         #Mask around H alpha and collapse the cube again
         Ha_mask=self.get_spec_mask_around_wave(self.Ha_lam, 0.01)
         im=self.collapse(wavelength_mask=Ha_mask)
-        self.light_image=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=settings.seeing, X=self.x_coords_2d, Y=self.y_coords_2d)
+        self.light_image=self.get_bestfit_lightprofile(oversample=1, seeing=settings.seeing, X=self.x_coords_2d, Y=self.y_coords_2d)
         #self.light_image=None
 
         #get the centre of the continuum image
@@ -781,17 +787,17 @@ class CubeKinematics(Cube):
 
         if params is None:
             params=self.fit_result.params
-        r_e=self.table['r50_int_z']
+        r_e=self.table['r50_disk']
 
         seeing_pixels=settings.seeing/self.pix_scale
 
         #stds=KF.get_errors_on_fit(params, self.kinfit_data, self.kinfit_noise, self.fit_result.flatchain.values, self.x_coords_1d, self.y_coords_1d, self.bins_1d)
-        gaussian_fit_to_light, fit_to_light_result=self.get_bestfit_lightprofile(oversample=settings.oversample, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d, return_full=True)
+        gaussian_fit_to_light, fit_to_light_result=self.get_bestfit_lightprofile(oversample=1, seeing=None, X=self.x_coords_2d, Y=self.y_coords_2d, return_full=True)
         #self.fit_errors=stds
-        (fig, ax)=P.plot_model(params, self.kinfit_data, self.kinfit_noise, self.bestfit_model, self.x_coords_1d, self.y_coords_1d, self.bins_1d, r_e, self.light_image, seeing_pixels, self.collapsed.copy(), gaussian_fit_to_light, self.object_name, fit_to_light_result)#, stds)
+        (fig, ax), (d, v_obs)=P.plot_model(params, self.kinfit_data, self.kinfit_noise, self.bestfit_model, self.x_coords_1d, self.y_coords_1d, self.bins_1d, r_e, self.light_image, seeing_pixels, self.collapsed.copy(), gaussian_fit_to_light, self.object_name, fit_to_light_result)#, stds)
 
 
-        return fig, ax
+        return (fig, ax), (d, v_obs)
 
 
     def plot_kinematic_maps(self, mask=None):
@@ -800,14 +806,6 @@ class CubeKinematics(Cube):
 
 
         return fig, ax
-
-
-        # r_e=cube_kins.table['r50_int_z']
-
-        # stds=KF.get_errors_on_fit(cube_kins.fit_result.params, cube_kins.kinfit_data, cube_kins.kinfit_data, cube_kins.fit_result.flatchain.values, cube_kins.x_coords_1d, cube_kins.y_coords_1d, cube_kins.bins_1d)
-        # cube_kins.fit_errors=stds
-        # (fig, ax)=P.plot_model(cube_kins.fit_result.params, cube_kins.kinfit_data, cube_kins.kinfit_data, cube_kins.x_coords_1d, cube_kins.y_coords_1d, cube_kins.bins_1d, r_e, stds)
-
 
     def get_bestfit_lightprofile(self, X, Y,oversample, seeing=None, return_full=False, **kwargs):
 
@@ -849,9 +847,9 @@ class CubeKinematics(Cube):
         
 
         if return_full:
-            ret=best_gaussian/np.max(best_gaussian), result
+            ret=best_gaussian/np.max(best_gaussian).T, result
         else:
-            ret=best_gaussian/np.max(best_gaussian)
+            ret=best_gaussian/np.max(best_gaussian).T
 
         return ret
 

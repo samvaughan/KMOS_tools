@@ -8,7 +8,8 @@ from scipy import signal
 from astropy.convolution import convolve
 from astropy.convolution import Gaussian2DKernel   
 
-import settings
+
+from . import settings
 # #Likelihood function here: saves pickling the parameters dictionary
 # def _lnprob(T, theta, var_names, bounds, data, errors, x, y, bins, a, s):
 
@@ -152,7 +153,7 @@ def velfield(params, data, oversample):
 
    
 
-    velfield_final=velfield[m_t].reshape(oversample*data.shape[0], oversample*data.shape[1])
+    velfield_final=velfield[m_t].reshape(oversample*data.shape[0], oversample*data.shape[1])+v0
 
     # import matplotlib.pyplot as plt 
     # import ipdb; ipdb.set_trace()
@@ -358,7 +359,7 @@ def get_fluxweighted_sigma(sigma_values, sigma_errors, light_image):
 
     #Need to also correct for beam smearing and the instrumental resolution!
 
-    return np.nansum(sigma_values*light_image/sigma_errors**2)/np.nansum(light_image/sigma_errors**2)
+    return np.nansum(sigma_values/sigma_errors**2)/np.nansum(1./sigma_errors**2)
 
 
 # def objective_function(params, data, errors, x, y, bins, light_image, seeing_conv, oversample=1):
